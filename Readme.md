@@ -45,11 +45,30 @@ graph TD
         M --> RET
     end
 
-    style E fill:#e1f5fe,stroke:#01579b
-    style F fill:#e1f5fe,stroke:#01579b
-    style H fill:#f3e5f5,stroke:#7b1fa2
-    style I fill:#f3e5f5,stroke:#7b1fa2
-    style K fill:#fff3e0,stroke:#e65100
+    %% Stylings
+    style A fill:#fff,stroke:#333,color:#000
+    style B fill:#fff,stroke:#333,color:#000
+    style C fill:#fff,stroke:#333,color:#000
+    style D fill:#fff,stroke:#333,color:#000
+    style G fill:#fff,stroke:#333,color:#000
+    style J fill:#fff,stroke:#333,color:#000
+    style L fill:#fff,stroke:#333,color:#000
+    style M fill:#fff,stroke:#333,color:#000
+    style RET fill:#e8f5e9,stroke:#2e7d32,color:#1b5e20
+
+    style E fill:#e1f5fe,stroke:#01579b,color:#01579b
+    style F fill:#e1f5fe,stroke:#01579b,color:#01579b
+    style H fill:#f3e5f5,stroke:#7b1fa2,color:#4a148c
+    style I fill:#f3e5f5,stroke:#7b1fa2,color:#4a148c
+    style K fill:#fff3e0,stroke:#e65100,color:#bf360c
+
+    %% Subgraph Styling
+    style Client_Ingress fill:#fafafa,stroke:#ddd,color:#333
+    style Fast_Path fill:#fafafa,stroke:#ddd,color:#333
+    style Intelligent_Path fill:#fafafa,stroke:#ddd,color:#333
+    style Backend_Sync fill:#fafafa,stroke:#ddd,color:#333
+
+
 ```
 
 ---
