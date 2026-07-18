@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -28,10 +29,18 @@ type Claims struct {
 	jwt.RegisteredClaims
 }
 
-var (
-	// In production, load this from environment
-	jwtKey = []byte("dev-secret-change-in-prod")
-)
+// jwtKey is loaded once at startup from the JWT_SECRET environment variable.
+// The process will not start if the variable is missing or empty.
+var jwtKey []byte
+
+func init() {
+	secret := os.Getenv("JWT_SECRET")
+	if secret == "" {
+		panic("JWT_SECRET environment variable is required but not set. " +
+			"Generate one with: openssl rand -hex 32")
+	}
+	jwtKey = []byte(secret)
+}
 
 // RateLimiter manages token buckets per tenant.
 type RateLimiter struct {

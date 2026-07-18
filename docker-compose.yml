@@ -1,10 +1,15 @@
 
-
 # ──────────────────────────────────────────────────────────────
-#  semantic-cache — local development environment
-#  Start everything:  docker-compose up -d
-#  Tear down + wipe:  docker-compose down -v
-#  Logs:              docker-compose logs -f cache-proxy
+#  semantic-cache — self-hosted deployment
+#
+#  SETUP (one-time):
+#    cp .env.example .env      ← fill in your passwords
+#    docker-compose up -d
+#
+#  USEFUL COMMANDS:
+#    Logs:      docker-compose logs -f cache-proxy
+#    Tear down: docker-compose down -v
+#    Restart:   docker-compose restart cache-proxy
 # ──────────────────────────────────────────────────────────────
 
 services:
@@ -16,26 +21,25 @@ services:
       dockerfile: Dockerfile
     container_name: semantic-cache-proxy
     ports:
-      - "8080:8080"   # HTTP API
-      - "9090:9090"   # Prometheus metrics
+      - "8080:8080"   # HTTP API — your app points here
+      - "9090:9090"   # Prometheus metrics (keep private)
     environment:
-      # ── Infra ───────────────────────────────────────
-      REDIS_URL:         "redis:6379"
-      POSTGRES_URL:      "postgres://cache:cache@postgres:5432/cache?sslmode=disable"
-      OLLAMA_URL:        "http://ollama:11434"
-      BACKEND_URL:       "http://mock-backend:8081"
-      # ── L1 cache ────────────────────────────────────
-      L1_MAX_BYTES:      "134217728"   # 128 MB
-      L1_DEFAULT_TTL:    "3600"        # seconds
-      # ── Circuit breaker ─────────────────────────────
-      CB_MAX_FAILURES:   "5"
-      CB_TIMEOUT:        "30s"
-      # ── Auth ────────────────────────────────────────
-      JWT_SECRET:        "dev-secret-change-in-prod"
-      # ── Observability ───────────────────────────────
-      LOG_LEVEL:         "info"
-      # ── Rate limiting ───────────────────────────────
-      RATE_LIMIT_RPM:    "1000"
+      # ── Infra (auto-wired to other containers) ───────────────
+      REDIS_URL:      "redis:6379"
+      POSTGRES_URL:   "postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable"
+      OLLAMA_URL:     "${OLLAMA_URL:-http://ollama:11434}"
+      # ── Security ─────────────────────────────────────────────
+      JWT_SECRET:     "${JWT_SECRET}"
+      # ── Cache tuning ─────────────────────────────────────────
+      L1_MAX_BYTES:   "${L1_MAX_BYTES:-134217728}"
+      L1_DEFAULT_TTL: "${L1_DEFAULT_TTL:-3600}"
+      # ── Rate limiting ─────────────────────────────────────────
+      RATE_LIMIT_RPM: "${RATE_LIMIT_RPM:-1000}"
+      # ── Circuit breaker ──────────────────────────────────────
+      CB_MAX_FAILURES: "${CB_MAX_FAILURES:-5}"
+      CB_TIMEOUT:      "${CB_TIMEOUT:-30s}"
+      # ── Observability ────────────────────────────────────────
+      LOG_LEVEL:       "${LOG_LEVEL:-info}"
     depends_on:
       postgres:
         condition: service_healthy
@@ -52,17 +56,15 @@ services:
     image: pgvector/pgvector:pg16
     container_name: semantic-cache-postgres
     environment:
-      POSTGRES_DB:       cache
-      POSTGRES_USER:     cache
-      POSTGRES_PASSWORD: cache
+      POSTGRES_DB:       "${POSTGRES_DB:-cache}"
+      POSTGRES_USER:     "${POSTGRES_USER:-cache}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
     volumes:
       - pgdata:/var/lib/postgresql/data
-      # Auto-apply migrations on first container start
-      - ./migrations:/docker-entrypoint-initdb.d:ro
     ports:
       - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U cache -d cache"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-cache} -d ${POSTGRES_DB:-cache}"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -95,7 +97,7 @@ services:
     networks:
       - cache-net
 
-  # ── 4. Ollama (embedding inference) ──────────────────────────
+  # ── 4. Ollama (local embeddings — no API key needed) ─────────
   ollama:
     image: ollama/ollama:latest
     container_name: semantic-cache-ollama
@@ -103,10 +105,24 @@ services:
       - "11434:11434"
     volumes:
       - ollamadata:/root/.ollama
-    # NOTE: After first start, pull the embedding model:
-    #   docker exec semantic-cache-ollama ollama pull nomic-embed-text
-    # Or run:  make ollama-pull
     restart: unless-stopped
+    networks:
+      - cache-net
+
+  # ── 4a. Ollama Model Initializer ─────────────────────────────
+  ollama-init:
+    image: curlimages/curl:latest
+    container_name: semantic-cache-ollama-init
+    depends_on:
+      - ollama
+    command: >
+      sh -c "
+        echo 'Waiting for Ollama API...'
+        until curl -s http://ollama:11434/api/tags > /dev/null; do sleep 2; done
+        echo 'Pulling nomic-embed-text model (this may take a minute)...'
+        curl -X POST http://ollama:11434/api/pull -d '{\"name\": \"nomic-embed-text\"}'
+        echo 'Model pulled successfully!'
+      "
     networks:
       - cache-net
 
@@ -119,14 +135,13 @@ services:
       - "--storage.tsdb.path=/prometheus"
       - "--web.console.libraries=/usr/share/prometheus/console_libraries"
       - "--web.console.templates=/usr/share/prometheus/consoles"
-      - "--web.enable-lifecycle"    # enables POST /-/reload
+      - "--web.enable-lifecycle"
     volumes:
       - ./configs/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./configs/alerts.yaml:/etc/prometheus/alerts.yml:ro
-
       - prometheusdata:/prometheus
     ports:
-      - "9091:9090"   # Prometheus UI at http://localhost:9091
+      - "9091:9090"   # Prometheus UI: http://localhost:9091
     restart: unless-stopped
     networks:
       - cache-net
@@ -136,36 +151,22 @@ services:
     image: grafana/grafana:latest
     container_name: semantic-cache-grafana
     ports:
-      - "4000:3000"   # Grafana UI at http://localhost:4000
+      - "4000:3000"   # Grafana UI: http://localhost:4000
     environment:
-      GF_SECURITY_ADMIN_USER:     admin
-      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_SECURITY_ADMIN_USER:     "${GRAFANA_ADMIN_USER:-admin}"
+      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_ADMIN_PASSWORD:-admin}"
       GF_USERS_ALLOW_SIGN_UP:    "false"
-      # Allow embedding in web UI
       GF_SECURITY_ALLOW_EMBEDDING: "true"
       GF_AUTH_ANONYMOUS_ENABLED: "true"
       GF_AUTH_ANONYMOUS_ORG_ROLE: "Viewer"
-      # Auto-provision Prometheus datasource
-      GF_DATASOURCES_DEFAULT_NAME:   Prometheus
-      GF_DATASOURCES_DEFAULT_TYPE:   prometheus
-      GF_DATASOURCES_DEFAULT_URL:    http://prometheus:9090
+      GF_DATASOURCES_DEFAULT_NAME: Prometheus
+      GF_DATASOURCES_DEFAULT_TYPE: prometheus
+      GF_DATASOURCES_DEFAULT_URL:  http://prometheus:9090
     volumes:
       - grafanadata:/var/lib/grafana
       - ./configs/grafana/provisioning:/etc/grafana/provisioning:ro
     depends_on:
       - prometheus
-    restart: unless-stopped
-    networks:
-      - cache-net
-
-  # ── 7. Mock Backend (LLM API Simulation) ──────────────────────
-  mock-backend:
-    build:
-      context: .
-      dockerfile: Dockerfile.mock
-    container_name: semantic-cache-mock-backend
-    ports:
-      - "8081:8081"
     restart: unless-stopped
     networks:
       - cache-net

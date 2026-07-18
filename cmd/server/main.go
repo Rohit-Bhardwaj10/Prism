@@ -18,8 +18,13 @@ import (
 	"github.com/Rohit-Bhardwaj10/semantic-cache/internal/metrics"
 	"github.com/Rohit-Bhardwaj10/semantic-cache/internal/policy"
 	"github.com/Rohit-Bhardwaj10/semantic-cache/internal/resilience"
+	"github.com/Rohit-Bhardwaj10/semantic-cache/migrations"
 	"github.com/Rohit-Bhardwaj10/semantic-cache/pkg/embeddings"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/golang-migrate/migrate/v4"
+	_ "github.com/golang-migrate/migrate/v4/database/postgres"
+	"github.com/golang-migrate/migrate/v4/source/iofs"
 )
 
 func main() {
@@ -30,13 +35,16 @@ func main() {
 
 	// 1. Load Configurations (Environment Variables)
 	redisAddr := getEnv("REDIS_URL", "localhost:6379")
-	dbURL := getEnv("POSTGRES_URL", "postgres://cache:cache@localhost:5432/cache?sslmode=disable")
+	dbURL := mustEnv("POSTGRES_URL")
 	ollamaURL := getEnv("OLLAMA_URL", "http://localhost:11434")
-	backendURL := getEnv("BACKEND_URL", "http://mock-backend:8081")
+	backendURL := getEnv("BACKEND_URL", "") // optional: only needed for legacy /cache/query
 	l1MaxBytesRaw := getEnv("L1_MAX_BYTES", "134217728") // 128MB
 	l1MaxBytes, _ := strconv.ParseInt(l1MaxBytesRaw, 10, 64)
 
 	// 2. Initialize Infrastructure
+	// Run Database Migrations
+	runMigrations(dbURL)
+
 	// Postgres Pool
 	pgPool, err := pgxpool.New(ctx, dbURL)
 	if err != nil {
@@ -52,9 +60,8 @@ func main() {
 	policyEngine, err := policy.NewEngine("configs/policies.yaml")
 	if err != nil {
 		log.Printf("Warning: Failed to load policies.yaml: %v. Using defaults.", err)
-		// Sprint 1 might not have the file yet, we can create a dummy one or handle
 	}
-	policyEngine.WatchSIGHUP() // hot reloading
+	policyEngine.WatchSIGHUP() // hot-reload on SIGHUP
 
 	classifier := policy.NewDomainClassifier()
 	normalizer := cache.NewNormalizer()
@@ -81,8 +88,12 @@ func main() {
 	
 	breaker := resilience.NewCircuitBreaker(5, 30*time.Second)
 	ollamaClient := embeddings.NewOllamaClient(ollamaURL, "nomic-embed-text", l2a.Client, breaker)
-	
-	backendClient := backend.NewHTTPClient(backendURL)
+
+	// Legacy /cache/query backend — optional. Proxy routes use per-request API keys instead.
+	var backendClient backend.Backend
+	if backendURL != "" {
+		backendClient = backend.NewHTTPClient(backendURL)
+	}
 
 	// 5. Orchestrate with Coordinator
 	coord := cache.NewCoordinator(cache.Config{
@@ -99,13 +110,8 @@ func main() {
 		Metrics:    promMetrics,
 	})
 
-	// 6. Start Lifecycle Tasks
-	// Startup Warmup (Sprint 4)
-	go func() {
-		_ = coord.LoadWarmCache(context.Background(), 5000)
-	}()
-	
-	// Distributed Invalidation Listener (Sprint 4)
+	// 6. Background tasks
+	go func() { _ = coord.LoadWarmCache(context.Background(), 5000) }()
 	go coord.StartInvalidationListener(context.Background())
 
 	// 7. Initialize & Start API Server (Sprint 5)
@@ -142,4 +148,37 @@ func getEnv(key, fallback string) string {
 		return val
 	}
 	return fallback
+}
+
+// mustEnv returns the value of an environment variable or fatals loudly if it is not set.
+// Use for variables that have no safe default (e.g. database connection strings).
+func mustEnv(key string) string {
+	val, ok := os.LookupEnv(key)
+	if !ok || val == "" {
+		log.Fatalf("Required environment variable %q is not set. See .env.example for guidance.", key)
+	}
+	return val
+}
+
+// runMigrations executes embedded SQL migrations against the database.
+func runMigrations(dbURL string) {
+	log.Println("Checking database migrations...")
+	
+	// Create an iofs driver from our embedded migrations package
+	d, err := iofs.New(migrations.FS, ".")
+	if err != nil {
+		log.Fatalf("Failed to load embedded migrations: %v", err)
+	}
+
+	m, err := migrate.NewWithSourceInstance("iofs", d, dbURL)
+	if err != nil {
+		log.Fatalf("Failed to initialize migrator: %v", err)
+	}
+	defer m.Close()
+
+	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
+		log.Fatalf("Failed to run migrations: %v", err)
+	}
+
+	log.Println("Database schema is up to date.")
 }

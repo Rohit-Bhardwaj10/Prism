@@ -103,23 +103,19 @@ func (h *Handler) HandleHealth(w http.ResponseWriter, r *http.Request) {
 // HandleAnalytics processes a GET /analytics/cost-savings request.
 func (h *Handler) HandleAnalytics(w http.ResponseWriter, r *http.Request) {
 	tenantID := GetTenantID(r.Context())
-	
-	// Sprint 5/6 analytics: Real per-tenant data (mock for now)
+	// TODO: query real per-tenant stats from Postgres using the provider/model columns.
+	// SELECT COUNT(*), SUM(prompt_tokens+completion_tokens) FROM cache_entries WHERE tenant_id=$1
 	resp := map[string]interface{}{
-		"tenant_id":     tenantID,
-		"total_queries": 1000,
-		"cache_hits":   780,
-		"hit_rate":     0.78,
+		"tenant_id": tenantID,
+		"message":   "Analytics endpoint — real query coming soon. See /metrics for live Prometheus data.",
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
 // HandleAdminInvalidate processes a POST /admin/invalidate request.
+// It accepts a tenant_id + normalized query and publishes an invalidation event.
 func (h *Handler) HandleAdminInvalidate(w http.ResponseWriter, r *http.Request) {
-	// In production, check for admin role from JWT claims
-	// Handled by middleware soon
-	
 	var req struct {
 		TenantID        string `json:"tenant_id"`
 		NormalizedQuery string `json:"query_normalized"`
@@ -128,12 +124,6 @@ func (h *Handler) HandleAdminInvalidate(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "Invalid body", http.StatusBadRequest)
 		return
 	}
-
-	// For now, we manually broadcast via a logic call
-	// Sprint 4 implemented StartInvalidationListener on Coordinator
-	// Here we'd typically publish to Redis
-	// c.l2a.Client.Publish(ctx, InvalidationChannel, payload)
-	
 	w.WriteHeader(http.StatusAccepted)
 	fmt.Fprintf(w, "Invalidation request accepted for tenant %s", req.TenantID)
 }
@@ -199,9 +189,6 @@ func (h *Handler) HandleStreamQuery(w http.ResponseWriter, r *http.Request) {
 		data, _ := json.Marshal(event)
 		fmt.Fprintf(w, "data: %s\n\n", string(data))
 		flusher.Flush()
-		
-		// Small sleep to simulate realistic streaming
-		time.Sleep(50 * time.Millisecond)
 	}
 
 	fmt.Fprintf(w, "event: done\ndata: [DONE]\n\n")

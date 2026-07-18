@@ -27,3 +27,9 @@
   # Data
   *.db
   data/
+
+  # Secrets — NEVER commit your real .env file
+  # .env.example is safe to commit (it's just a template)
+  .env
+  .env.local
+  .env.production

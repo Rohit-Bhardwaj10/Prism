@@ -11,9 +11,8 @@ import (
 )
 
 const (
-	anthropicDefaultURL     = "https://api.anthropic.com/v1/messages"
-	anthropicAPIVersion     = "2023-06-01"
-	anthropicDefaultVersion = anthropicAPIVersion
+	anthropicDefaultURL = "https://api.anthropic.com/v1/messages"
+	anthropicAPIVersion = "2023-06-01"
 )
 
 // AnthropicBackend calls the Anthropic Messages API.

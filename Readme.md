@@ -2,128 +2,225 @@
 
 [![Go Version](https://img.shields.io/badge/Go-1.22+-00ADD8?style=for-the-badge&logo=go)](https://go.dev/)
 [![Docker](https://img.shields.io/badge/Docker-Enabled-2496ED?style=for-the-badge&logo=docker)](https://www.docker.com/)
-[![Observability](https://img.shields.io/badge/Metrics-Prometheus%20%2B%20Grafana-orange?style=for-the-badge)](http://localhost:3000)
+[![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](LICENSE)
 
-An enterprise-grade, high-performance caching proxy designed specifically for **Large Language Models (LLMs)**. It reduces API costs by up to **85%** and latencies by **98%** by intelligently reusing semantic matches using **time-aware, intent-based policies**.
+**A drop-in caching proxy for LLM APIs.** Point your existing OpenAI/Anthropic SDK at it and cut costs by up to 85%. No code changes required beyond changing one URL.
 
----
-
-## 🏗️ The Multi-Tier Intelligent Architecture
-
-The proxy operates as a "Smart Gateway" between your application and expensive backends (e.g., OpenAI, Anthropic). It uses a sophisticated **4-Layer Strategy** to balance speed with semantic accuracy.
-
-```mermaid
-graph TD
-    subgraph Client_Ingress ["1. Ingress & Security"]
-        A[Client Request] --> B[JWT Auth & Tenant ID]
-        B --> C[Rate Limiter]
-        C --> D[L0: Intent Normalizer]
-    end
-
-    subgraph Fast_Path ["2. The Fast Path (Exact)"]
-        D --> E{L1: Pocket LRU}
-        E -- Miss --> F{L2a: Redis Sync}
-        E -- Hit (Sub-1ms) --> RET[Return Response]
-        F -- Hit (Sub-10ms) --> BF1[Backfill L1]
-        BF1 --> RET
-    end
-
-    subgraph Intelligent_Path ["3. The Brain (Semantic)"]
-        F -- Miss --> G[Ollama: Generate Embedding]
-        G --> H{L2b: Vector Search}
-        H -- "Match found (>85%)" --> I{Policy Engine}
-        I -- "Confidence Accepted" --> BF2[Backfill L1 + L2a]
-        BF2 --> RET
-        I -- "Expired/Rejected" --> J
-    end
-
-    subgraph Backend_Sync ["4. The Source of Truth"]
-        H -- "No Match" --> J[Singleflight: Deduplicator]
-        J --> K[LLM Backend Call]
-        K --> L[Async Write-Through]
-        L --> M[Update L1, L2a, L2b]
-        M --> RET
-    end
-
-    %% Stylings
-    style A fill:#fff,stroke:#333,color:#000
-    style B fill:#fff,stroke:#333,color:#000
-    style C fill:#fff,stroke:#333,color:#000
-    style D fill:#fff,stroke:#333,color:#000
-    style G fill:#fff,stroke:#333,color:#000
-    style J fill:#fff,stroke:#333,color:#000
-    style L fill:#fff,stroke:#333,color:#000
-    style M fill:#fff,stroke:#333,color:#000
-    style RET fill:#e8f5e9,stroke:#2e7d32,color:#1b5e20
-
-    style E fill:#e1f5fe,stroke:#01579b,color:#01579b
-    style F fill:#e1f5fe,stroke:#01579b,color:#01579b
-    style H fill:#f3e5f5,stroke:#7b1fa2,color:#4a148c
-    style I fill:#f3e5f5,stroke:#7b1fa2,color:#4a148c
-    style K fill:#fff3e0,stroke:#e65100,color:#bf360c
-
-    %% Subgraph Styling
-    style Client_Ingress fill:#fafafa,stroke:#ddd,color:#333
-    style Fast_Path fill:#fafafa,stroke:#ddd,color:#333
-    style Intelligent_Path fill:#fafafa,stroke:#ddd,color:#333
-    style Backend_Sync fill:#fafafa,stroke:#ddd,color:#333
-
-
+```
+Your App  →  semantic-cache (this)  →  OpenAI / Anthropic / Groq
+               ↓ cache hit? Returns instantly for free
+               ↓ cache miss? Calls upstream, stores result for next time
 ```
 
 ---
 
-## 🚀 The Data Flow in Detail
+## ⚡ Quickstart (Self-Hosted)
 
-### 1. Ingress & Normalization (The Receptionist)
-Every request is first validated for security (**JWT**) and tenant-isolation. The **L0 Normalizer** then cleans the query (e.g., *"What's"* becomes *"What is"*). This ensures that minor typos or punctuation don't cause expensive cache misses.
+**Prerequisites:** Docker + Docker Compose installed. That's it.
 
-### 2. The Fast Path (L1 & L2a)
-- **L1 (In-Memory):** Checks the local Go LRU cache. It's the fastest path, serving hot queries in **under 1ms**.
-- **L2a (Redis):** If L1 misses, we check Redis. This allows multiple proxy instances to share the same "exact-match" cache.
+```bash
+# 1. Clone the repo
+git clone https://github.com/your-username/semantic-cache.git
+cd semantic-cache
 
-### 3. The Semantic Brain (L2b)
-If no exact match exists, we get "Smart." Using **Ollama**, we generate a mathematical representation (Vector) of the question's *meaning*. 
-- We search **Postgres (pgvector)** for similar meanings.
-- **Example:** *"Tell me about Paris"* matches *"Information about the capital of France"* because they share the same intent.
+# 2. Configure credentials
+cp .env.example .env
+# Open .env and set POSTGRES_PASSWORD and JWT_SECRET
 
-### 4. The Policy Gatekeeper
-Before serving a semantic match, our **Policy Engine** evaluates:
-- **Similarity Score:** Is it close enough (e.g., >88%)?
-- **Staleness:** Is the answer too old for this specific domain (Medical vs. General)?
+# 3. Start the stack
+docker-compose up -d
+# (Note: On first boot, an init container automatically pulls the embeddings model. This takes ~1 minute depending on your connection.)
 
-### 5. Backend & Write-Through
-If the Librarian is stumped, we ask the **LLM**. To save money, we use `singleflight` to ensure that if 100 people ask the same question at once, we only pay for **one** LLM call. The result is then "Written-Through" all cache tiers for future users.
+# 4. Verify it's running
+curl http://localhost:8080/health
+# {"status":"ready"}
+```
+
+**That's it.** Your proxy is live at `http://localhost:8080`.
 
 ---
 
-## ✨ Key Enterprise Features
+## 🔌 Integration (Change One Line)
 
-- **🛡️ Multi-Tenant Isolation:** Tenant A's private data is never visible to Tenant B, even for identical queries.
-- **📊 Operational Transparency:** Real-time Grafana dashboards tracking Net Savings, Cache Hit Ratio (CHR), and P95 Latencies.
-- **⚡ Performance Guarantee:** Built-in circuit breakers and rate limiters protect your upstream budget and ensure sub-20ms response times for hits.
+### Python — OpenAI SDK
+```python
+# Before
+from openai import OpenAI
+client = OpenAI(api_key="sk-your-key")
+
+# After (change only base_url)
+from openai import OpenAI
+client = OpenAI(
+    api_key="sk-your-key",
+    base_url="http://localhost:8080/proxy/openai"
+)
+
+# Your existing code works unchanged
+response = client.chat.completions.create(
+    model="gpt-4o",
+    messages=[{"role": "user", "content": "What is machine learning?"}]
+)
+```
+
+### Python — Anthropic SDK
+```python
+# Before
+from anthropic import Anthropic
+client = Anthropic(api_key="sk-ant-your-key")
+
+# After
+from anthropic import Anthropic
+client = Anthropic(
+    api_key="sk-ant-your-key",
+    base_url="http://localhost:8080/proxy/anthropic"
+)
+```
+
+### curl (any language)
+```bash
+# Supported providers: openai, groq, together, anthropic
+curl -X POST http://localhost:8080/proxy/openai \
+  -H "Authorization: Bearer sk-your-openai-key" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"gpt-4o","messages":[{"role":"user","content":"Explain REST APIs"}]}'
+```
+
+---
+
+## 📊 How to Tell It's Working
+
+### Response headers on every call
+```
+X-Cache-Hit: true        ← it was a cache hit
+X-Cache: L1              ← which cache layer served it (L1/L2a/L2b/backend)
+```
+
+### Response body — `x_cache_metadata` field
+```json
+{
+  "choices": [{"message": {"content": "..."}}],
+  "x_cache_metadata": {
+    "hit": true,
+    "source": "L1",
+    "latency_ms": 2
+  }
+}
+```
+
+### Live dashboard
+Open **http://localhost:4000** in your browser (Grafana).
+- Default login: the `GRAFANA_ADMIN_USER` / `GRAFANA_ADMIN_PASSWORD` from your `.env`
+- See real-time hit rates, cost savings, and latency per tenant
+
+---
+
+## 🏗️ How It Works — The 4-Layer Cache
+
+Every request flows through these layers fastest-first:
+
+```
+Request
+  │
+  ▼
+L0  Intent Normalizer   "What's 2+2?" → "what is 2 + 2"  (typo/phrasing normalizer)
+  │
+  ▼
+L1  In-Memory LRU       Sub-1ms. Hot queries served from Go process memory.
+  │ miss
+  ▼
+L2a Redis               Sub-10ms. Shared exact-match cache across instances.
+  │ miss
+  ▼
+L2b Postgres + pgvector  Semantic search. "Tell me about Paris" matches
+  │                       "Information about the capital of France" (same meaning).
+  │ miss
+  ▼
+Backend (OpenAI etc.)   Real API call. Result stored in all layers for next time.
+```
+
+**Key insight:** L2b uses vector embeddings (via Ollama locally, no API key needed) to find *semantically similar* past answers — not just exact string matches.
+
+---
+
+## 🔒 Multi-Tenant Isolation
+
+Run one proxy for multiple users/teams. Each tenant's cache is completely isolated.
+
+```bash
+# Team A's requests
+curl -H "X-Tenant-ID: team-alpha" http://localhost:8080/proxy/openai ...
+
+# Team B — cannot see Team A's cached answers
+curl -H "X-Tenant-ID: team-beta" http://localhost:8080/proxy/openai ...
+```
+
+If `X-Tenant-ID` is omitted, requests go to the `default` tenant.
+
+---
+
+## 🛠️ Configuration Reference
+
+All configuration is done via the `.env` file. Copy `.env.example` to `.env` and edit.
+
+| Variable | Default | Description |
+|---|---|---|
+| `POSTGRES_PASSWORD` | *required* | Database password |
+| `JWT_SECRET` | *required* | Secret for signing auth tokens |
+| `OLLAMA_URL` | `http://ollama:11434` | Embedding service URL |
+| `L1_MAX_BYTES` | `134217728` | L1 cache size (128MB) |
+| `RATE_LIMIT_RPM` | `1000` | Max requests/min per tenant |
+| `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
+| `GRAFANA_ADMIN_PASSWORD` | *required* | Grafana dashboard password |
+
+---
+
+## 📡 API Reference
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/proxy/openai` | OpenAI Chat Completions proxy |
+| `POST` | `/proxy/anthropic` | Anthropic Messages API proxy |
+| `POST` | `/proxy/groq` | Groq Chat Completions proxy |
+| `POST` | `/proxy/together` | Together AI proxy |
+| `POST` | `/cache/query` | Direct cache query (legacy) |
+| `GET` | `/health` | Health check |
+| `GET` | `/metrics` | Prometheus metrics |
+| `GET` | `/analytics/cost-savings` | Per-tenant savings report |
 
 ---
 
 ## 🛠️ Tech Stack
 
-- **Engine:** Go 1.22+
-- **Memory:** Custom LRU (L1) & Redis 7.2 (L2a)
-- **Vector Brain:** PostgreSQL 16 + `pgvector` (L2b)
-- **Embeddings:** Ollama (`nomic-embed-text`)
-- **Observability:** Prometheus + Grafana
+- **Engine:** Go 1.22+ (single binary, ~15MB Docker image)
+- **L1:** Custom in-process LRU cache
+- **L2a:** Redis 7.2
+- **L2b:** PostgreSQL 16 + `pgvector`
+- **Embeddings:** Ollama (`nomic-embed-text`) — runs locally, no API key
+- **Observability:** Prometheus + Grafana (pre-configured, auto-provisioned)
 
 ---
 
-## 🏎️ Running the Stack
+## 🔧 Useful Commands
 
 ```bash
-# 1. Start all services (DB, Redis, Metrics, Proxy)
-docker-compose up -d
+# View logs
+docker-compose logs -f cache-proxy
 
-# 2. Pull the embedding model
-make ollama-pull
+# Restart just the proxy (after code changes)
+docker-compose restart cache-proxy
 
-# 3. View the Mission Control
-# Grafana: http://localhost:3000 (admin/admin)
+# Check cache hit stats
+curl http://localhost:8080/metrics | grep cache_hits
+
+# Wipe everything and start fresh
+docker-compose down -v && docker-compose up -d
+
+# Rebuild after code changes
+docker-compose up -d --build cache-proxy
 ```
+
+---
+
+## 📄 License
+
+MIT — free to use, modify, and self-host.
