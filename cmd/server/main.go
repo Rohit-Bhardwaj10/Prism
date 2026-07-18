@@ -64,7 +64,6 @@ func main() {
 	l1 := cache.NewL1Cache(l1MaxBytes)
 	l2b := cache.NewL2bCache(pgPool, "nomic-embed-text", "v1")
 
-	// --- SPRINT 9: Embedding Version Consistency Check ---
 	storedVersions, err := l2b.GetStoredVersions(ctx)
 	if err != nil {
 		log.Printf("Warning: Failed to check stored embedding versions: %v", err)
@@ -76,7 +75,6 @@ func main() {
 			}
 		}
 	}
-	// --- END SPRINT 9 CHECK ---
 
 	auditLogger := audit.NewLogger()
 	promMetrics := metrics.InitMetrics()
@@ -84,7 +82,6 @@ func main() {
 	breaker := resilience.NewCircuitBreaker(5, 30*time.Second)
 	ollamaClient := embeddings.NewOllamaClient(ollamaURL, "nomic-embed-text", l2a.Client, breaker)
 	
-	// Real LLM Backend (for Sprint 5, can be a mock client or a URL)
 	backendClient := backend.NewHTTPClient(backendURL)
 
 	// 5. Orchestrate with Coordinator
@@ -121,6 +118,10 @@ func main() {
 	}()
 
 	fmt.Println("Semantic Cache Proxy is ready on http://localhost:8080")
+	fmt.Println("  Legacy:    POST /cache/query")
+	fmt.Println("  Proxy:     POST /proxy/{openai,groq,together,anthropic}")
+	fmt.Println("             Authorization: Bearer <provider-api-key>")
+	fmt.Println("             X-Tenant-ID: <tenant>  (optional, defaults to 'default')")
 
 	// 8. Graceful Shutdown
 	<-ctx.Done()

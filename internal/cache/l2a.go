@@ -8,6 +8,10 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+type l2layer struct {
+	Client *redis.Client
+}
+
 // L2aCache is a Redis-backed distributed cache.
 type L2aCache struct {
 	Client *redis.Client

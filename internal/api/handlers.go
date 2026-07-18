@@ -6,14 +6,16 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
+	backendpkg "github.com/Rohit-Bhardwaj10/semantic-cache/internal/backend"
 	"github.com/Rohit-Bhardwaj10/semantic-cache/internal/cache"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"os/exec"
-	"sync"
 )
+
 
 // Handler handles HTTP requests for the semantic cache API.
 type Handler struct {
@@ -274,3 +276,300 @@ func (h *Handler) HandleLoadgenStop(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(`{"status": "stopped"}`))
 }
+
+// ── Proxy handlers ────────────────────────────────────────────────────────────
+
+// HandleProxyOpenAI handles POST /proxy/openai — forwards to OpenAI Chat Completions.
+func (h *Handler) HandleProxyOpenAI(w http.ResponseWriter, r *http.Request) {
+	h.handleOpenAICompatibleProxy(w, r, "openai")
+}
+
+// HandleProxyGroq handles POST /proxy/groq — forwards to Groq Chat Completions.
+func (h *Handler) HandleProxyGroq(w http.ResponseWriter, r *http.Request) {
+	h.handleOpenAICompatibleProxy(w, r, "groq")
+}
+
+// HandleProxyTogether handles POST /proxy/together — forwards to Together AI.
+func (h *Handler) HandleProxyTogether(w http.ResponseWriter, r *http.Request) {
+	h.handleOpenAICompatibleProxy(w, r, "together")
+}
+
+// handleOpenAICompatibleProxy is the shared implementation for OpenAI-compatible proxy routes.
+func (h *Handler) handleOpenAICompatibleProxy(w http.ResponseWriter, r *http.Request, provider string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req OpenAIProxyRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	if err := req.Validate(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	tenantID := GetTenantID(r.Context())
+	requestID := GetRequestID(r.Context())
+	apiKey := GetProxyAPIKey(r)
+	start := time.Now()
+
+	// Convert to canonical backend.Message slice
+	msgs := make([]backendpkg.Message, 0, len(req.Messages))
+	system := req.System
+	for _, m := range req.Messages {
+		if m.Role == "system" {
+			// Some clients embed system prompt in messages[]; hoist it out.
+			if system == "" {
+				system = m.Content
+			}
+			continue
+		}
+		msgs = append(msgs, backendpkg.Message{Role: m.Role, Content: m.Content})
+	}
+
+	coordReq := cache.QueryRequest{
+		Provider:  provider,
+		Model:     req.Model,
+		System:    system,
+		Messages:  msgs,
+		TenantID:  tenantID,
+		RequestID: requestID,
+	}
+
+	// Normalize for L2b embedding (proxy path uses embeddableText inside CheckCache)
+	normalized := "" // no single "query" string for proxy paths
+	cacheKey := cache.ComputeCacheKeyExported(coordReq, normalized)
+	domain := h.coord.ClassifyDomain(normalized)
+
+	hit, err := h.coord.CheckCache(r.Context(), coordReq, normalized, cacheKey, domain, start)
+	if err != nil {
+		http.Error(w, "Cache check error: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	var content, model string
+	var usage backendpkg.Usage
+
+	if hit != nil {
+		// Cache hit
+		content = hit.Answer
+		model = req.Model
+		usage = hit.Usage
+	} else {
+		// Cache miss — call upstream
+		proxyReq := &backendpkg.ProxyRequest{
+			Provider:  provider,
+			Model:     req.Model,
+			System:    system,
+			Messages:  msgs,
+			TenantID:  tenantID,
+			RequestID: requestID,
+			APIKey:    apiKey,
+		}
+		proxyResp, err := h.coord.CallOpenAICompatible(r.Context(), proxyReq)
+		if err != nil {
+			http.Error(w, "Upstream error: "+err.Error(), http.StatusBadGateway)
+			return
+		}
+		content = proxyResp.Content
+		model = proxyResp.Model
+		usage = proxyResp.Usage
+		hit = &cache.QueryResponse{Source: "backend", Hit: false}
+
+		// Persist asynchronously
+		entry := &cache.CacheEntry{
+			TenantID:         tenantID,
+			QueryRaw:         req.Model + ": " + lastUserMessage(msgs),
+			QueryNormalized:  normalized,
+			QueryHash:        cacheKey,
+			QueryDomain:      domain,
+			Answer:           content,
+			Provider:         provider,
+			Model:            model,
+			PromptTokens:     usage.PromptTokens,
+			CompletionTokens: usage.CompletionTokens,
+			TTLSeconds:       86400,
+		}
+
+		var emb []float32
+		if embText := cache.EmbeddableTextExported(coordReq, normalized); embText != "" {
+			emb, _ = h.coord.EmbedText(r.Context(), embText)
+		}
+		go h.coord.PersistAsync(context.Background(), tenantID, normalized, cacheKey, domain, entry, emb)
+	}
+
+	// Build OpenAI-compatible response
+	resp := OpenAIProxyResponse{
+		ID:     "chatcmpl-cache-" + requestID,
+		Object: "chat.completion",
+		Model:  model,
+	}
+	resp.Choices = []struct {
+		Index   int `json:"index"`
+		Message struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		} `json:"message"`
+		FinishReason string `json:"finish_reason"`
+	}{
+		{
+			Index:        0,
+			FinishReason: "stop",
+			Message: struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			}{Role: "assistant", Content: content},
+		},
+	}
+	resp.Usage.PromptTokens = usage.PromptTokens
+	resp.Usage.CompletionTokens = usage.CompletionTokens
+	resp.Usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+	resp.Usage.Estimated = usage.Estimated
+	resp.CacheMetadata.Hit = hit.Hit
+	resp.CacheMetadata.Source = hit.Source
+	resp.CacheMetadata.Confidence = hit.Confidence
+	resp.CacheMetadata.LatencyMS = time.Since(start).Milliseconds()
+
+	// Surface cache status via response headers for easier client inspection
+	w.Header().Set("X-Cache", hit.Source)
+	if hit.Hit {
+		w.Header().Set("X-Cache-Hit", "true")
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// HandleProxyAnthropic handles POST /proxy/anthropic — forwards to Anthropic Messages API.
+func (h *Handler) HandleProxyAnthropic(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req AnthropicProxyRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	if err := req.Validate(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	tenantID := GetTenantID(r.Context())
+	requestID := GetRequestID(r.Context())
+	apiKey := GetProxyAPIKey(r)
+	start := time.Now()
+
+	msgs := make([]backendpkg.Message, 0, len(req.Messages))
+	for _, m := range req.Messages {
+		msgs = append(msgs, backendpkg.Message{Role: m.Role, Content: m.Content})
+	}
+
+	coordReq := cache.QueryRequest{
+		Provider:  "anthropic",
+		Model:     req.Model,
+		System:    req.System,
+		Messages:  msgs,
+		TenantID:  tenantID,
+		RequestID: requestID,
+	}
+
+	normalized := ""
+	cacheKey := cache.ComputeCacheKeyExported(coordReq, normalized)
+	domain := h.coord.ClassifyDomain(normalized)
+
+	hit, err := h.coord.CheckCache(r.Context(), coordReq, normalized, cacheKey, domain, start)
+	if err != nil {
+		http.Error(w, "Cache check error: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	var content, model string
+	var usage backendpkg.Usage
+
+	if hit != nil {
+		content = hit.Answer
+		model = req.Model
+		usage = hit.Usage
+	} else {
+		proxyReq := &backendpkg.ProxyRequest{
+			Provider:  "anthropic",
+			Model:     req.Model,
+			System:    req.System,
+			Messages:  msgs,
+			TenantID:  tenantID,
+			RequestID: requestID,
+			APIKey:    apiKey,
+		}
+		proxyResp, err := h.coord.CallAnthropic(r.Context(), proxyReq)
+		if err != nil {
+			http.Error(w, "Upstream error: "+err.Error(), http.StatusBadGateway)
+			return
+		}
+		content = proxyResp.Content
+		model = proxyResp.Model
+		usage = proxyResp.Usage
+		hit = &cache.QueryResponse{Source: "backend", Hit: false}
+
+		entry := &cache.CacheEntry{
+			TenantID:         tenantID,
+			QueryRaw:         req.Model + ": " + lastUserMessage(msgs),
+			QueryNormalized:  normalized,
+			QueryHash:        cacheKey,
+			QueryDomain:      domain,
+			Answer:           content,
+			Provider:         "anthropic",
+			Model:            model,
+			PromptTokens:     usage.PromptTokens,
+			CompletionTokens: usage.CompletionTokens,
+			TTLSeconds:       86400,
+		}
+
+		var emb []float32
+		if embText := cache.EmbeddableTextExported(coordReq, normalized); embText != "" {
+			emb, _ = h.coord.EmbedText(r.Context(), embText)
+		}
+		go h.coord.PersistAsync(context.Background(), tenantID, normalized, cacheKey, domain, entry, emb)
+	}
+
+	// Build Anthropic-compatible response
+	resp := AnthropicProxyResponse{
+		ID:    "msg-cache-" + requestID,
+		Type:  "message",
+		Role:  "assistant",
+		Model: model,
+	}
+	resp.Content = []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}{{Type: "text", Text: content}}
+	resp.Usage.InputTokens = usage.PromptTokens
+	resp.Usage.OutputTokens = usage.CompletionTokens
+	resp.Usage.Estimated = usage.Estimated
+	resp.CacheMetadata.Hit = hit.Hit
+	resp.CacheMetadata.Source = hit.Source
+	resp.CacheMetadata.Confidence = hit.Confidence
+	resp.CacheMetadata.LatencyMS = time.Since(start).Milliseconds()
+
+	w.Header().Set("X-Cache", hit.Source)
+	if hit.Hit {
+		w.Header().Set("X-Cache-Hit", "true")
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// lastUserMessage returns the content of the last user-role message, for QueryRaw storage.
+func lastUserMessage(msgs []backendpkg.Message) string {
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role == "user" {
+			return msgs[i].Content
+		}
+	}
+	return ""
+}
+

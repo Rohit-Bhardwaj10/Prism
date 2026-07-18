@@ -33,7 +33,14 @@ func NewServer(addr string, coord *cache.Coordinator) *Server {
 	mux.HandleFunc("/analytics/cost-savings", h.HandleAnalytics)
 	mux.HandleFunc("/feedback", h.HandleFeedback)
 	mux.HandleFunc("/metrics", h.HandleMetrics)
-	
+
+	// Proxy routes — drop-in replacements for upstream provider endpoints.
+	// Clients set Authorization: Bearer <provider-api-key> and X-Tenant-ID: <tenant>.
+	mux.HandleFunc("/proxy/openai", h.HandleProxyOpenAI)
+	mux.HandleFunc("/proxy/groq", h.HandleProxyGroq)
+	mux.HandleFunc("/proxy/together", h.HandleProxyTogether)
+	mux.HandleFunc("/proxy/anthropic", h.HandleProxyAnthropic)
+
 	// Admin routes
 	mux.HandleFunc("/admin/invalidate", h.HandleAdminInvalidate)
 	mux.HandleFunc("/admin/reload-policies", h.HandleAdminReload)

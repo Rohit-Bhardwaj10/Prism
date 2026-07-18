@@ -109,10 +109,24 @@ func GetTenantID(ctx context.Context) string {
 }
 
 // AuthMiddleware validates JWT and extracts the tenant ID.
+// Proxy routes (/proxy/*) bypass JWT validation — they use upstream provider keys directly
+// and identify the tenant via X-Tenant-ID header (defaults to "default").
 func AuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Health checks — no auth required
 		if r.URL.Path == "/health" || r.URL.Path == "/readyz" || r.URL.Path == "/livez" {
 			next.ServeHTTP(w, r)
+			return
+		}
+
+		// Proxy routes — read tenant from header, skip JWT
+		if strings.HasPrefix(r.URL.Path, "/proxy/") {
+			tenantID := r.Header.Get("X-Tenant-ID")
+			if tenantID == "" {
+				tenantID = "default"
+			}
+			ctx := context.WithValue(r.Context(), tenantIDKey, tenantID)
+			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
 
@@ -167,3 +181,16 @@ func CORSMiddleware(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
+
+// GetProxyAPIKey extracts the raw Bearer token from the Authorization header.
+// For proxy routes, this token is the client's upstream provider API key (e.g. an OpenAI sk-...).
+// It is NOT validated by our JWT middleware — it is forwarded verbatim to the upstream provider.
+// Returns "" if no Authorization: Bearer header is present.
+func GetProxyAPIKey(r *http.Request) string {
+	auth := r.Header.Get("Authorization")
+	if strings.HasPrefix(auth, "Bearer ") {
+		return strings.TrimPrefix(auth, "Bearer ")
+	}
+	return ""
+}
+

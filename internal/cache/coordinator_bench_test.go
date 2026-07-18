@@ -14,17 +14,17 @@ func BenchmarkCoordinator_L1_Hit(b *testing.B) {
 	ctx := context.Background()
 	normalizer := NewNormalizer()
 	l1 := NewL1Cache(1024 * 1024)
-	
+
 	coord := NewCoordinator(Config{
 		Normalizer: normalizer,
 		L1:         l1,
-		Policy:     policy.NewDomainClassifier().Engine, // basic engine
+		Policy:     policy.NewDomainClassifier().engine(), // basic engine
 	})
 
 	tenant := "bench_tenant"
 	query := "What is the capital of France?"
 	ans := "Paris"
-	
+
 	// Pre-populate
 	coord.l1.Set(tenant, coord.normalizer.Normalize(query), ans, 1*time.Hour)
 

@@ -193,6 +193,7 @@ func confidence(sim float32, ageSecs int, pol Policy) float32 {
 
 // ── Cache tiers ───────────────────────────────────────────────────────────────
 
+
 type entry struct {
 	answer    string
 	domain    string
