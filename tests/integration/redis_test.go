@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Rohit-Bhardwaj10/semantic-cache/internal/cache"
+	"github.com/Rohit-Bhardwaj10/prism/internal/cache"
 )
 
 func TestL2aRedisIntegration(t *testing.T) {

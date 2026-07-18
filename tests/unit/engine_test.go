@@ -3,7 +3,7 @@ package unit
 import (
 	"os"
 	"testing"
-	"github.com/Rohit-Bhardwaj10/semantic-cache/internal/policy"
+	"github.com/Rohit-Bhardwaj10/prism/internal/policy"
 )
 
 func TestPolicyEngine(t *testing.T) {

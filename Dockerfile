@@ -9,7 +9,7 @@ RUN go mod download
 
 # Copy source and build
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /semantic-cache ./cmd/server
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /prism ./cmd/server
 
 # ── Runtime stage ─────────────────────────────────────────────
 FROM alpine:3.20
@@ -20,7 +20,7 @@ RUN apk add --no-cache ca-certificates tzdata
 WORKDIR /app
 
 # Copy binary
-COPY --from=builder /semantic-cache .
+COPY --from=builder /prism .
 
 # Copy config files (policies + synonyms)
 COPY configs/ ./configs/
@@ -31,4 +31,4 @@ COPY migrations/ ./migrations/
 # Expose API and metrics ports
 EXPOSE 8080 9090
 
-ENTRYPOINT ["/app/semantic-cache"]
+ENTRYPOINT ["/app/prism"]

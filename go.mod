@@ -1,4 +1,4 @@
-module github.com/Rohit-Bhardwaj10/semantic-cache
+module github.com/Rohit-Bhardwaj10/prism
 
 go 1.25.0
 

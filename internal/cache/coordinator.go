@@ -10,12 +10,12 @@ import (
 
 	"golang.org/x/sync/singleflight"
 
-	"github.com/Rohit-Bhardwaj10/semantic-cache/internal/audit"
-	"github.com/Rohit-Bhardwaj10/semantic-cache/internal/backend"
-	"github.com/Rohit-Bhardwaj10/semantic-cache/internal/metrics"
-	"github.com/Rohit-Bhardwaj10/semantic-cache/internal/policy"
-	"github.com/Rohit-Bhardwaj10/semantic-cache/internal/resilience"
-	"github.com/Rohit-Bhardwaj10/semantic-cache/pkg/embeddings"
+	"github.com/Rohit-Bhardwaj10/prism/internal/audit"
+	"github.com/Rohit-Bhardwaj10/prism/internal/backend"
+	"github.com/Rohit-Bhardwaj10/prism/internal/metrics"
+	"github.com/Rohit-Bhardwaj10/prism/internal/policy"
+	"github.com/Rohit-Bhardwaj10/prism/internal/resilience"
+	"github.com/Rohit-Bhardwaj10/prism/pkg/embeddings"
 )
 
 // Coordinator orchestrates the L0 -> L1 -> L2a -> L2b -> Backend flow.

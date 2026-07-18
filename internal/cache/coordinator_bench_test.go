@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Rohit-Bhardwaj10/semantic-cache/internal/policy"
+	"github.com/Rohit-Bhardwaj10/prism/internal/policy"
 )
 
 // BenchmarkCoordinator_L1_Hit measures the performance of an L1 cache hit.

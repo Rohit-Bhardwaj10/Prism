@@ -8,7 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/Rohit-Bhardwaj10/semantic-cache/pkg/embeddings"
+	"github.com/Rohit-Bhardwaj10/prism/pkg/embeddings"
 )
 
 type mockBreaker struct {

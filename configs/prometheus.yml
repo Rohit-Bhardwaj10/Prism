@@ -16,8 +16,8 @@ rule_files:
 # ── Scrape configs ────────────────────────────────────────────
 scrape_configs:
 
-  # semantic-cache proxy — exposes /metrics on port 9090
-  - job_name: "semantic-cache"
+  # prism proxy — exposes /metrics on port 9090
+  - job_name: "prism"
     static_configs:
       - targets: ["cache-proxy:8080"]
     metrics_path: /metrics

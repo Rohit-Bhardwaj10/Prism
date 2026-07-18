@@ -9,11 +9,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Rohit-Bhardwaj10/semantic-cache/internal/api"
-	"github.com/Rohit-Bhardwaj10/semantic-cache/internal/audit"
-	"github.com/Rohit-Bhardwaj10/semantic-cache/internal/backend"
-	"github.com/Rohit-Bhardwaj10/semantic-cache/internal/cache"
-	"github.com/Rohit-Bhardwaj10/semantic-cache/internal/policy"
+	"github.com/Rohit-Bhardwaj10/prism/internal/api"
+	"github.com/Rohit-Bhardwaj10/prism/internal/audit"
+	"github.com/Rohit-Bhardwaj10/prism/internal/backend"
+	"github.com/Rohit-Bhardwaj10/prism/internal/cache"
+	"github.com/Rohit-Bhardwaj10/prism/internal/policy"
 	"github.com/golang-jwt/jwt/v5"
 )
 

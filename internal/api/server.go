@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/Rohit-Bhardwaj10/semantic-cache/internal/cache"
+	"github.com/Rohit-Bhardwaj10/prism/internal/cache"
 )
 
 // Server defines the HTTP server that hosts the semantic cache API.

@@ -8,11 +8,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Rohit-Bhardwaj10/semantic-cache/internal/backend"
-	"github.com/Rohit-Bhardwaj10/semantic-cache/internal/cache"
-	"github.com/Rohit-Bhardwaj10/semantic-cache/internal/policy"
-	"github.com/Rohit-Bhardwaj10/semantic-cache/internal/resilience"
-	"github.com/Rohit-Bhardwaj10/semantic-cache/pkg/embeddings"
+	"github.com/Rohit-Bhardwaj10/prism/internal/backend"
+	"github.com/Rohit-Bhardwaj10/prism/internal/cache"
+	"github.com/Rohit-Bhardwaj10/prism/internal/policy"
+	"github.com/Rohit-Bhardwaj10/prism/internal/resilience"
+	"github.com/Rohit-Bhardwaj10/prism/pkg/embeddings"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 

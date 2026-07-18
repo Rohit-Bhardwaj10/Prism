@@ -1,5 +1,5 @@
 # ──────────────────────────────────────────────────────────────
-#  Makefile — semantic-cache developer shortcuts
+#  Makefile — prism developer shortcuts
 #  Usage: make <target>
 # ──────────────────────────────────────────────────────────────
 
@@ -9,7 +9,7 @@
 # ── Default target ────────────────────────────────────────────
 help:
 	@echo ""
-	@echo "  semantic-cache developer commands"
+	@echo "  prism developer commands"
 	@echo ""
 	@echo "  Infrastructure"
 	@echo "    make up           Start all Docker services"
@@ -57,20 +57,20 @@ build:
 # ── Ollama ───────────────────────────────────────────────────
 ollama-pull:
 	@echo "Pulling nomic-embed-text model into Ollama…"
-	docker exec semantic-cache-ollama ollama pull nomic-embed-text
+	docker exec prism-ollama ollama pull nomic-embed-text
 	@echo "Done. Test with: curl http://localhost:11434/api/embeddings -d '{\"model\":\"nomic-embed-text\",\"prompt\":\"hello\"}'"
 
 # ── Database ─────────────────────────────────────────────────
 psql:
-	docker exec -it semantic-cache-postgres psql -U cache -d cache
+	docker exec -it prism-postgres psql -U cache -d cache
 
 maintenance:
-	docker exec -i semantic-cache-postgres psql -U cache -d cache < scripts/maintenance.sql
+	docker exec -i prism-postgres psql -U cache -d cache < scripts/maintenance.sql
 
 
 # ── Redis ────────────────────────────────────────────────────
 redis-cli:
-	docker exec -it semantic-cache-redis redis-cli
+	docker exec -it prism-redis redis-cli
 
 # ── Tests ────────────────────────────────────────────────────
 test: unit integration

@@ -1,6 +1,6 @@
 
 # ──────────────────────────────────────────────────────────────
-#  semantic-cache — self-hosted deployment
+#  prism — self-hosted deployment
 #
 #  SETUP (one-time):
 #    cp .env.example .env      ← fill in your passwords
@@ -14,12 +14,12 @@
 
 services:
 
-  # ── 1. Semantic Cache Proxy ───────────────────────────────────
+  # ── 1. Prism Proxy ───────────────────────────────────
   cache-proxy:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: semantic-cache-proxy
+    container_name: prism-proxy
     ports:
       - "8080:8080"   # HTTP API — your app points here
       - "9090:9090"   # Prometheus metrics (keep private)
@@ -54,7 +54,7 @@ services:
   # ── 2. PostgreSQL 16 + pgvector ───────────────────────────────
   postgres:
     image: pgvector/pgvector:pg16
-    container_name: semantic-cache-postgres
+    container_name: prism-postgres
     environment:
       POSTGRES_DB:       "${POSTGRES_DB:-cache}"
       POSTGRES_USER:     "${POSTGRES_USER:-cache}"
@@ -76,7 +76,7 @@ services:
   # ── 3. Redis 7.2 ─────────────────────────────────────────────
   redis:
     image: redis:7.2-alpine
-    container_name: semantic-cache-redis
+    container_name: prism-redis
     command: >
       redis-server
       --appendonly yes
@@ -100,7 +100,7 @@ services:
   # ── 4. Ollama (local embeddings — no API key needed) ─────────
   ollama:
     image: ollama/ollama:latest
-    container_name: semantic-cache-ollama
+    container_name: prism-ollama
     ports:
       - "11434:11434"
     volumes:
@@ -112,7 +112,7 @@ services:
   # ── 4a. Ollama Model Initializer ─────────────────────────────
   ollama-init:
     image: curlimages/curl:latest
-    container_name: semantic-cache-ollama-init
+    container_name: prism-ollama-init
     depends_on:
       - ollama
     command: >
@@ -129,7 +129,7 @@ services:
   # ── 5. Prometheus ─────────────────────────────────────────────
   prometheus:
     image: prom/prometheus:latest
-    container_name: semantic-cache-prometheus
+    container_name: prism-prometheus
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.path=/prometheus"
@@ -149,7 +149,7 @@ services:
   # ── 6. Grafana ────────────────────────────────────────────────
   grafana:
     image: grafana/grafana:latest
-    container_name: semantic-cache-grafana
+    container_name: prism-grafana
     ports:
       - "4000:3000"   # Grafana UI: http://localhost:4000
     environment:

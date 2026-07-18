@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Rohit-Bhardwaj10/semantic-cache/internal/resilience"
+	"github.com/Rohit-Bhardwaj10/prism/internal/resilience"
 )
 
 func TestCircuitBreaker(t *testing.T) {

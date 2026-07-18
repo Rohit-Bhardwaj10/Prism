@@ -1,5 +1,5 @@
 -- ──────────────────────────────────────────────────────────────
---  maintenance.sql — semantic-cache Periodic Maintenance
+--  maintenance.sql — prism Periodic Maintenance
 -- ──────────────────────────────────────────────────────────────
 
 -- 1. Purge expired entries based on TTL

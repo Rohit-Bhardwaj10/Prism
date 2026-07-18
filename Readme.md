@@ -1,4 +1,4 @@
-# 🧠 Semantic Cache Proxy
+# 🧠 Prism Proxy
 
 [![Go Version](https://img.shields.io/badge/Go-1.22+-00ADD8?style=for-the-badge&logo=go)](https://go.dev/)
 [![Docker](https://img.shields.io/badge/Docker-Enabled-2496ED?style=for-the-badge&logo=docker)](https://www.docker.com/)
@@ -7,7 +7,7 @@
 **A drop-in caching proxy for LLM APIs.** Point your existing OpenAI/Anthropic SDK at it and cut costs by up to 85%. No code changes required beyond changing one URL.
 
 ```
-Your App  →  semantic-cache (this)  →  OpenAI / Anthropic / Groq
+Your App  →  prism (this)  →  OpenAI / Anthropic / Groq
                ↓ cache hit? Returns instantly for free
                ↓ cache miss? Calls upstream, stores result for next time
 ```
@@ -20,8 +20,8 @@ Your App  →  semantic-cache (this)  →  OpenAI / Anthropic / Groq
 
 ```bash
 # 1. Clone the repo
-git clone https://github.com/your-username/semantic-cache.git
-cd semantic-cache
+git clone https://github.com/your-username/prism.git
+cd prism
 
 # 2. Configure credentials
 cp .env.example .env

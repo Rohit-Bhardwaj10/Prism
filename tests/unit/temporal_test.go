@@ -2,7 +2,7 @@ package unit
 
 import (
 	"testing"
-	"github.com/Rohit-Bhardwaj10/semantic-cache/internal/policy"
+	"github.com/Rohit-Bhardwaj10/prism/internal/policy"
 )
 
 func TestTemporalClass(t *testing.T) {

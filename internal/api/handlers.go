@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	backendpkg "github.com/Rohit-Bhardwaj10/semantic-cache/internal/backend"
-	"github.com/Rohit-Bhardwaj10/semantic-cache/internal/cache"
+	backendpkg "github.com/Rohit-Bhardwaj10/prism/internal/backend"
+	"github.com/Rohit-Bhardwaj10/prism/internal/cache"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
