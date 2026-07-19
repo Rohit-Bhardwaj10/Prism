@@ -4,6 +4,8 @@
 [![Docker](https://img.shields.io/badge/Docker-Enabled-2496ED?style=for-the-badge&logo=docker)](https://www.docker.com/)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](LICENSE)
 
+**Website:** [https://prism-rb.vercel.app/](https://prism-rb.vercel.app/)
+
 **A drop-in caching proxy for LLM APIs.** Point your existing OpenAI/Anthropic SDK at it and cut costs by up to 85%. No code changes required beyond changing one URL.
 
 ```
