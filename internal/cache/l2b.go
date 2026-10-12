@@ -23,7 +23,8 @@ func NewL2bCache(pool *pgxpool.Pool, model, version string) *L2bCache {
 }
 
 // Search finds the top-K semantically similar entries for a given embedding.
-func (c *L2bCache) Search(ctx context.Context, tenantID string, embedding []float32, limit int) ([]*CacheEntry, error) {
+// It filters by tenant, embedding model, provider/model (if specified), and active TTL.
+func (c *L2bCache) Search(ctx context.Context, tenantID, provider, model string, embedding []float32, limit int) ([]*CacheEntry, error) {
 	// Standard COSINE similarity search:
 	// <=> is the cosine distance operator. 
 	// (1 - distance) = similarity.
@@ -36,11 +37,14 @@ func (c *L2bCache) Search(ctx context.Context, tenantID string, embedding []floa
 		WHERE tenant_id = $2
 		  AND embed_model = $3
 		  AND embed_version = $4
+		  AND (ttl_seconds = 0 OR created_at + (ttl_seconds * INTERVAL '1 second') > NOW())
+		  AND ($5 = '' OR provider = $5)
+		  AND ($6 = '' OR model = $6)
 		ORDER BY embedding <=> $1
-		LIMIT $5
+		LIMIT $7
 	`
 
-	rows, err := c.pool.Query(ctx, query, embedding, tenantID, c.embedModel, c.embedVersion, limit)
+	rows, err := c.pool.Query(ctx, query, embedding, tenantID, c.embedModel, c.embedVersion, provider, model, limit)
 	if err != nil {
 		return nil, fmt.Errorf("postgres search error: %w", err)
 	}

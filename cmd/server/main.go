@@ -37,7 +37,10 @@ func main() {
 	redisAddr := getEnv("REDIS_URL", "localhost:6379")
 	dbURL := mustEnv("POSTGRES_URL")
 	ollamaURL := getEnv("OLLAMA_URL", "http://localhost:11434")
-	backendURL := getEnv("BACKEND_URL", "") // optional: only needed for legacy /cache/query
+	backendURL := os.Getenv("UPSTREAM_BACKEND_URL") // optional
+	embedProvider := getEnv("EMBEDDING_PROVIDER", "ollama")
+	openAIApiKey := os.Getenv("OPENAI_API_KEY")
+	openAIBaseURL := getEnv("OPENAI_BASE_URL", "https://api.openai.com/v1")
 	l1MaxBytesRaw := getEnv("L1_MAX_BYTES", "134217728") // 128MB
 	l1MaxBytes, _ := strconv.ParseInt(l1MaxBytesRaw, 10, 64)
 
@@ -67,27 +70,34 @@ func main() {
 	normalizer := cache.NewNormalizer()
 	_ = normalizer.LoadSynonyms("configs/synonyms.yaml")
 
-	// 4. Initialize Core Tiers
+	embedModel := getEnv("EMBEDDING_MODEL", "nomic-embed-text")
 	l1 := cache.NewL1Cache(l1MaxBytes)
-	l2b := cache.NewL2bCache(pgPool, "nomic-embed-text", "v1")
+	l2b := cache.NewL2bCache(pgPool, embedModel, "v1")
 
 	storedVersions, err := l2b.GetStoredVersions(ctx)
 	if err != nil {
 		log.Printf("Warning: Failed to check stored embedding versions: %v", err)
 	} else {
 		for _, v := range storedVersions {
-			if v.Model != "nomic-embed-text" || v.Version != "v1" {
-				log.Fatalf("CRITICAL: Stored embedding version mismatch! Found (%s, %s), expected (nomic-embed-text, v1). "+
-					"Please migrate or flush the cache to avoid corruption.", v.Model, v.Version)
+			if v.Model != embedModel || v.Version != "v1" {
+				log.Fatalf("CRITICAL: Stored embedding version mismatch! Found (%s, %s), expected (%s, v1). "+
+					"Please migrate or flush the cache to avoid corruption.", v.Model, v.Version, embedModel)
 			}
 		}
 	}
 
 	auditLogger := audit.NewLogger()
 	promMetrics := metrics.InitMetrics()
-	
-	breaker := resilience.NewCircuitBreaker(5, 30*time.Second)
-	ollamaClient := embeddings.NewOllamaClient(ollamaURL, "nomic-embed-text", l2a.Client, breaker)
+
+	embedBreaker := resilience.NewCircuitBreaker(5, 30*time.Second)
+	backendBreaker := resilience.NewCircuitBreaker(5, 30*time.Second)
+
+	var embedClient embeddings.Client
+	if embedProvider == "openai" {
+		embedClient = embeddings.NewOpenAIClient(openAIBaseURL, openAIApiKey, embedModel, l2a.Client, embedBreaker)
+	} else {
+		embedClient = embeddings.NewOllamaClient(ollamaURL, embedModel, l2a.Client, embedBreaker)
+	}
 
 	// Legacy /cache/query backend — optional. Proxy routes use per-request API keys instead.
 	var backendClient backend.Backend
@@ -101,11 +111,11 @@ func main() {
 		L1:         l1,
 		L2a:        l2a,
 		L2b:        l2b,
-		Embeddings: ollamaClient,
+		Embeddings: embedClient,
 		Policy:     policyEngine,
 		Classifier: classifier,
 		Backend:    backendClient,
-		Breaker:    breaker,
+		Breaker:    backendBreaker,
 		Audit:      auditLogger,
 		Metrics:    promMetrics,
 	})
@@ -163,7 +173,7 @@ func mustEnv(key string) string {
 // runMigrations executes embedded SQL migrations against the database.
 func runMigrations(dbURL string) {
 	log.Println("Checking database migrations...")
-	
+
 	// Create an iofs driver from our embedded migrations package
 	d, err := iofs.New(migrations.FS, ".")
 	if err != nil {

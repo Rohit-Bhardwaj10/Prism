@@ -142,7 +142,7 @@ func main() {
 	if u := os.Getenv("CACHE_URL"); u != "" {
 		baseURL = u
 	}
-	workers := 3
+	workers := 20
 	if w := os.Getenv("WORKERS"); w != "" {
 		if n, err := strconv.Atoi(w); err == nil {
 			workers = n
@@ -174,8 +174,8 @@ func main() {
 		}()
 	}
 
-	// Feed queries in a loop — 70% repeats, 30% fresh, rate ≤ 5 req/s to stay under limit
-	tick := time.NewTicker(200 * time.Millisecond) // 5/sec total
+	// Feed queries in a loop — 70% repeats, 30% fresh, rate ≤ 50 req/s to stay under limit
+	tick := time.NewTicker(20 * time.Millisecond) // 50/sec total
 	defer tick.Stop()
 
 	i := 0

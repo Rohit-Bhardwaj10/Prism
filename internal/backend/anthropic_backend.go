@@ -31,10 +31,13 @@ func NewAnthropicBackend() *AnthropicBackend {
 // ── Wire format structs ──────────────────────────────────────────────────────
 
 type anthropicRequest struct {
-	Model     string             `json:"model"`
-	MaxTokens int                `json:"max_tokens"`
-	System    string             `json:"system,omitempty"`
-	Messages  []anthropicMessage `json:"messages"`
+	Model       string             `json:"model"`
+	MaxTokens   int                `json:"max_tokens"`
+	System      string             `json:"system,omitempty"`
+	Messages    []anthropicMessage `json:"messages"`
+	Temperature *float64           `json:"temperature,omitempty"`
+	TopP        *float64           `json:"top_p,omitempty"`
+	Tools       interface{}        `json:"tools,omitempty"`
 }
 
 type anthropicMessage struct {
@@ -87,12 +90,18 @@ func (b *AnthropicBackend) ProxyCall(ctx context.Context, req *ProxyRequest) (*P
 		msgs = append(msgs, anthropicMessage{Role: m.Role, Content: m.Content})
 	}
 
-	// Default to a sensible max_tokens if caller doesn't override (proxy doesn't expose it yet).
+	maxTokens := 4096
+	if req.MaxTokens > 0 {
+		maxTokens = req.MaxTokens
+	}
 	payload, err := json.Marshal(anthropicRequest{
-		Model:     req.Model,
-		MaxTokens: 4096,
-		System:    req.System,
-		Messages:  msgs,
+		Model:       req.Model,
+		MaxTokens:   maxTokens,
+		System:      req.System,
+		Messages:    msgs,
+		Temperature: req.Temperature,
+		TopP:        req.TopP,
+		Tools:       req.Tools,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("anthropic_backend: marshal error: %w", err)

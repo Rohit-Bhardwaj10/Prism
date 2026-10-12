@@ -1,6 +1,10 @@
 package api
 
-import "fmt"
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+)
 
 const (
 	MaxQueryLength = 2048 // 2KB max for a single query to prevent DoS
@@ -54,16 +58,68 @@ type ServiceStatus struct {
 
 // ProxyMessage is the wire-format message for proxy endpoints (OpenAI and Anthropic style).
 type ProxyMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role       string      `json:"role"`
+	Content    string      `json:"content"`
+	Name       string      `json:"name,omitempty"`
+	ToolCallID string      `json:"tool_call_id,omitempty"`
+	ToolCalls  interface{} `json:"tool_calls,omitempty"`
+}
+
+func (m *ProxyMessage) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		Role       string          `json:"role"`
+		Content    json.RawMessage `json:"content"`
+		Name       string          `json:"name,omitempty"`
+		ToolCallID string          `json:"tool_call_id,omitempty"`
+		ToolCalls  interface{}     `json:"tool_calls,omitempty"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	m.Role = raw.Role
+	m.Name = raw.Name
+	m.ToolCallID = raw.ToolCallID
+	m.ToolCalls = raw.ToolCalls
+
+	if len(raw.Content) == 0 {
+		m.Content = ""
+		return nil
+	}
+	var str string
+	if err := json.Unmarshal(raw.Content, &str); err == nil {
+		m.Content = str
+		return nil
+	}
+	var parts []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(raw.Content, &parts); err == nil {
+		var texts []string
+		for _, p := range parts {
+			if p.Text != "" {
+				texts = append(texts, p.Text)
+			}
+		}
+		m.Content = strings.Join(texts, " ")
+		return nil
+	}
+	m.Content = string(raw.Content)
+	return nil
 }
 
 // OpenAIProxyRequest is the body accepted by POST /proxy/openai, /proxy/groq, /proxy/together.
 // It is a subset of the OpenAI Chat Completions request — only fields we inspect or forward.
 type OpenAIProxyRequest struct {
-	Model    string         `json:"model"`
-	System   string         `json:"system,omitempty"` // non-standard convenience field (moved to messages[] if set)
-	Messages []ProxyMessage `json:"messages"`
+	Model       string         `json:"model"`
+	System      string         `json:"system,omitempty"` // non-standard convenience field (moved to messages[] if set)
+	Messages    []ProxyMessage `json:"messages"`
+	Stream      bool           `json:"stream,omitempty"`
+	Temperature *float64       `json:"temperature,omitempty"`
+	TopP        *float64       `json:"top_p,omitempty"`
+	MaxTokens   int            `json:"max_tokens,omitempty"`
+	Tools       interface{}    `json:"tools,omitempty"`
+	ToolChoice  interface{}    `json:"tool_choice,omitempty"`
 }
 
 func (r *OpenAIProxyRequest) Validate() error {
@@ -107,10 +163,14 @@ type OpenAIProxyResponse struct {
 
 // AnthropicProxyRequest is the body accepted by POST /proxy/anthropic.
 type AnthropicProxyRequest struct {
-	Model     string         `json:"model"`
-	System    string         `json:"system,omitempty"`
-	MaxTokens int            `json:"max_tokens,omitempty"` // forwarded verbatim but not cached
-	Messages  []ProxyMessage `json:"messages"`
+	Model       string         `json:"model"`
+	System      string         `json:"system,omitempty"`
+	MaxTokens   int            `json:"max_tokens,omitempty"` // forwarded verbatim
+	Messages    []ProxyMessage `json:"messages"`
+	Stream      bool           `json:"stream,omitempty"`
+	Temperature *float64       `json:"temperature,omitempty"`
+	TopP        *float64       `json:"top_p,omitempty"`
+	Tools       interface{}    `json:"tools,omitempty"`
 }
 
 func (r *AnthropicProxyRequest) Validate() error {

@@ -38,10 +38,17 @@ func TestCoordinator_Integration(t *testing.T) {
 	// Real L1
 	l1 := cache.NewL1Cache(1024 * 1024)
 
-	// L2a/L2b (Real if containers are up, otherwise we might skip)
-	// For this test, we'll try to connect but handle failures
+	// L2a/L2b (Real if containers are up, otherwise skip)
 	l2a := cache.NewL2aCache("localhost:6379", "", 0)
 	defer l2a.Close()
+
+	pingCtx, pingCancel := context.WithTimeout(ctx, 1*time.Second)
+	defer pingCancel()
+
+	if err := l2a.Client.Ping(pingCtx).Err(); err != nil {
+		t.Skip("Skipping full integration test: Redis not available on localhost:6379")
+		return
+	}
 
 	// Use pool from environment or default
 	pool, err := pgxpool.New(ctx, "postgres://cache:cache@localhost:5432/cache?sslmode=disable")
@@ -50,6 +57,11 @@ func TestCoordinator_Integration(t *testing.T) {
 		return
 	}
 	defer pool.Close()
+
+	if err := pool.Ping(pingCtx); err != nil {
+		t.Skip("Skipping full integration test: Postgres not reachable on localhost:5432")
+		return
+	}
 	l2b := cache.NewL2bCache(pool, "test-model", "v1")
 
 	// Global Logic

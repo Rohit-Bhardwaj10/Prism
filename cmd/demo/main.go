@@ -136,24 +136,44 @@ var domainPolicies = map[string]Policy{
 func detectDomain(q string) string {
 	q = strings.ToLower(q)
 
-	// containsWord checks if q contains the exact substring (word-level check)
-	containsAnyWord := func(q string, keywords []string) bool {
+	// Clean punctuation into spaces to tokenize into distinct words,
+	// preventing partial substring false positives like "capital" matching "api".
+	var sb strings.Builder
+	for _, r := range q {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			sb.WriteRune(r)
+		} else {
+			sb.WriteRune(' ')
+		}
+	}
+	words := strings.Fields(sb.String())
+	wordSet := make(map[string]bool, len(words))
+	for _, w := range words {
+		wordSet[w] = true
+	}
+	padded := " " + strings.Join(words, " ") + " "
+
+	containsAnyWord := func(keywords []string) bool {
 		for _, kw := range keywords {
-			if strings.Contains(q, kw) {
+			if strings.Contains(kw, " ") {
+				if strings.Contains(padded, " "+kw+" ") {
+					return true
+				}
+			} else if wordSet[kw] {
 				return true
 			}
 		}
 		return false
 	}
 
-	if containsAnyWord(q, []string{
+	if containsAnyWord([]string{
 		"weather", "rain", "sunny", "temperature", "forecast",
 		"humidity", "wind", "storm", "snow", "cloudy",
 	}) {
 		return "weather"
 	}
 
-	if containsAnyWord(q, []string{
+	if containsAnyWord([]string{
 		"stock", "price", "market", "invest", "finance",
 		"trading", "portfolio", "equity", "nasdaq", "crypto",
 		"bitcoin", "dividend", "earnings",
@@ -161,7 +181,7 @@ func detectDomain(q string) string {
 		return "finance"
 	}
 
-	if containsAnyWord(q, []string{
+	if containsAnyWord([]string{
 		"code", "function", "algorithm", "python", "golang", "javascript",
 		"typescript", "program", "debug", "compile", "runtime", "library",
 		"framework", "api", "database", "sql", "docker", "kubernetes",
@@ -173,7 +193,7 @@ func detectDomain(q string) string {
 		return "coding"
 	}
 
-	if containsAnyWord(q, []string{
+	if containsAnyWord([]string{
 		"symptom", "disease", "health", "medicine", "drug", "treatment",
 		"diagnosis", "cancer", "virus", "vaccine", "hospital", "doctor",
 	}) {
@@ -511,7 +531,7 @@ func main() {
 		switch strings.ToLower(input) {
 		case "exit", "quit", "q":
 			printFinalStats(coord, history)
-			fmt.Println("\nGoodbye!\n")
+			fmt.Printf("\nGoodbye!\n\n")
 			return
 
 		case "help", "?":
@@ -740,7 +760,7 @@ func hitRateColored(hits int64, rate float64) string {
 
 func printHistory(history []historyEntry) {
 	if len(history) == 0 {
-		fmt.Println("\n  No queries yet.\n")
+		fmt.Printf("\n  No queries yet.\n\n")
 		return
 	}
 	fmt.Println()

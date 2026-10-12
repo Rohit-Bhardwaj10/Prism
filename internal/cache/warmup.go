@@ -41,12 +41,18 @@ func (c *Coordinator) LoadWarmCache(ctx context.Context, limit int) error {
 			continue
 		}
 
-		// Backfill L1 and L2a synchronously for warmup
-		c.l1.Set(e.TenantID, e.QueryNormalized, e.Answer, 1*time.Hour)
-		if c.l2a != nil {
-			_ = c.l2a.Set(ctx, e.TenantID, e.QueryNormalized, e.Answer, 24*time.Hour)
+		// Backfill L1 and L2a synchronously for warmup using QueryHash
+		key := e.QueryHash
+		if key == "" {
+			key = e.QueryNormalized
 		}
-		count++
+		if key != "" {
+			c.l1.Set(e.TenantID, key, e.Answer, 1*time.Hour)
+			if c.l2a != nil {
+				_ = c.l2a.Set(ctx, e.TenantID, key, e.Answer, 24*time.Hour)
+			}
+			count++
+		}
 	}
 
 	log.Printf("Warmup: loaded %d hot entries into cache tiers", count)

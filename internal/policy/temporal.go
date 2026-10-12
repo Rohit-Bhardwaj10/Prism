@@ -1,6 +1,9 @@
 package policy
 
-import "strings"
+import (
+	"regexp"
+	"strings"
+)
 
 const (
 	TemporalPresent = "present"
@@ -9,34 +12,33 @@ const (
 	TemporalNone    = ""
 )
 
+var (
+	futureRegex  = regexp.MustCompile(`(?i)\b(tomorrow|next week|next month|upcoming)\b`)
+	pastRegex    = regexp.MustCompile(`(?i)\b(yesterday|last week|last month|previously)\b`)
+	presentRegex = regexp.MustCompile(`(?i)\b(today|tonight|now|currently|right now)\b`)
+)
+
 // TemporalClass extracts the temporal context from a normalized query string.
 func TemporalClass(query string) string {
-	q := strings.ToLower(query)
+	q := strings.TrimSpace(strings.ToLower(query))
+	if q == "" {
+		return TemporalNone
+	}
 
 	// Future checks
-	if containsAny(q, "tomorrow", "next week", "next month", "upcoming") {
+	if futureRegex.MatchString(q) {
 		return TemporalFuture
 	}
 
 	// Past checks
-	if containsAny(q, "yesterday", "last week", "last month", "previously") {
+	if pastRegex.MatchString(q) {
 		return TemporalPast
 	}
 
 	// Present checks
-	if containsAny(q, "today", "tonight", "now", "currently", "right now") {
+	if presentRegex.MatchString(q) {
 		return TemporalPresent
 	}
 
 	return TemporalNone
-}
-
-func containsAny(s string, keywords ...string) bool {
-	for _, kw := range keywords {
-		// Use simple contains for now; normalization should have handled spacing.
-		if strings.Contains(s, kw) {
-			return true
-		}
-	}
-	return false
 }

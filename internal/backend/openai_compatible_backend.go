@@ -44,8 +44,13 @@ func NewOpenAICompatibleBackend(provider string) *OpenAICompatibleBackend {
 // ── Wire format structs ──────────────────────────────────────────────────────
 
 type openAIRequest struct {
-	Model    string          `json:"model"`
-	Messages []openAIMessage `json:"messages"`
+	Model       string          `json:"model"`
+	Messages    []openAIMessage `json:"messages"`
+	Temperature *float64        `json:"temperature,omitempty"`
+	TopP        *float64        `json:"top_p,omitempty"`
+	MaxTokens   int             `json:"max_tokens,omitempty"`
+	Tools       interface{}     `json:"tools,omitempty"`
+	ToolChoice  interface{}     `json:"tool_choice,omitempty"`
 }
 
 type openAIMessage struct {
@@ -106,8 +111,13 @@ func (b *OpenAICompatibleBackend) ProxyCall(ctx context.Context, req *ProxyReque
 	}
 
 	payload, err := json.Marshal(openAIRequest{
-		Model:    req.Model,
-		Messages: msgs,
+		Model:       req.Model,
+		Messages:    msgs,
+		Temperature: req.Temperature,
+		TopP:        req.TopP,
+		MaxTokens:   req.MaxTokens,
+		Tools:       req.Tools,
+		ToolChoice:  req.ToolChoice,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("openai_compatible_backend: marshal error: %w", err)

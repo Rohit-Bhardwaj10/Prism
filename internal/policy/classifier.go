@@ -1,44 +1,61 @@
 package policy
 
 import (
+	"regexp"
 	"strings"
 )
 
-// DomainClassifier categorizes queries into predefined domains for policy application.
-type DomainClassifier struct {
-	// keywords maps a domain name to a list of trigger words.
-	keywords map[string][]string
+type domainRule struct {
+	domain   string
+	patterns []*regexp.Regexp
 }
 
-// NewDomainClassifier initializes the classifier with core domain keywords.
+// DomainClassifier categorizes queries into predefined domains for policy application.
+type DomainClassifier struct {
+	rules []domainRule
+}
+
+// NewDomainClassifier initializes the classifier with core domain keywords using word boundaries.
 func NewDomainClassifier() *DomainClassifier {
-	return &DomainClassifier{
-		keywords: map[string][]string{
-			"weather": {"weather", "temperature", "forecast", "rain", "snow", "sunny", "humidity", "wind"},
-			"finance": {"price", "stock", "market", "finance", "bitcoin", "crypto", "trading", "shares", "nasdaq", "dow jones"},
-			"news":    {"news", "today", "headlines", "politics", "events", "happened", "current"},
-			"coding":  {"code", "function", "golang", "javascript", "error", "how to", "debug", "library", "implementation"},
-			"medical": {"symptom", "pain", "doctor", "health", "medicine", "disease", "treatment", "clinic"},
-			"legal":   {"law", "legal", "statute", "court", "lawyer", "attorney", "regulation", "compliance"},
-		},
+	// Fixed priority order for deterministic classification
+	domainKeywords := []struct {
+		domain string
+		words  []string
+	}{
+		{"coding", []string{"code", "function", "golang", "javascript", "error", "how to", "debug", "library", "implementation"}},
+		{"finance", []string{"price", "stock", "market", "finance", "bitcoin", "crypto", "trading", "shares", "nasdaq", "dow jones"}},
+		{"weather", []string{"weather", "temperature", "forecast", "rain", "snow", "sunny", "humidity", "wind"}},
+		{"medical", []string{"symptom", "pain", "doctor", "health", "medicine", "disease", "treatment", "clinic"}},
+		{"legal", []string{"law", "legal", "statute", "court", "lawyer", "attorney", "regulation", "compliance"}},
+		{"news", []string{"news", "today", "headlines", "politics", "events", "happened", "current"}},
 	}
+
+	rules := make([]domainRule, 0, len(domainKeywords))
+	for _, dk := range domainKeywords {
+		patterns := make([]*regexp.Regexp, 0, len(dk.words))
+		for _, w := range dk.words {
+			re := regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(w) + `\b`)
+			patterns = append(patterns, re)
+		}
+		rules = append(rules, domainRule{domain: dk.domain, patterns: patterns})
+	}
+
+	return &DomainClassifier{rules: rules}
 }
 
 // Classify determines the domain of a query.
-// It uses a keyword fast-path and will eventually support vector centroid fallback.
 func (c *DomainClassifier) Classify(query string) string {
 	q := strings.ToLower(query)
 
-	// Step 1: Keyword fast-path
-	for domain, kws := range c.keywords {
-		for _, kw := range kws {
-			if strings.Contains(q, kw) {
-				return domain
+	// Step 1: Keyword fast-path with whole word boundaries
+	for _, rule := range c.rules {
+		for _, pat := range rule.patterns {
+			if pat.MatchString(q) {
+				return rule.domain
 			}
 		}
 	}
 
-	// Step 2: Centroid-based vector fallback (Phase 2 feature)
-	// For now, return "general" if no keywords match.
+	// Step 2: Fallback to "general"
 	return "general"
 }

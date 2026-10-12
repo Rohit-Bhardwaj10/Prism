@@ -3,7 +3,9 @@ package cache
 import (
 	"os"
 	"regexp"
+	"sort"
 	"strings"
+	"sync"
 
 	"gopkg.in/yaml.v3"
 )
@@ -13,9 +15,17 @@ var (
 	whitespaceRegex  = regexp.MustCompile(`\s+`)
 )
 
+type synonymRule struct {
+	key string
+	val string
+	re  *regexp.Regexp
+}
+
 // Normalizer handles L0 normalization of query strings.
 type Normalizer struct {
+	mu       sync.RWMutex
 	synonyms map[string]string
+	rules    []synonymRule
 }
 
 // SynonymConfig matches the structure of configs/synonyms.yaml
@@ -42,7 +52,35 @@ func (n *Normalizer) LoadSynonyms(path string) error {
 		return err
 	}
 
+	n.mu.Lock()
+	defer n.mu.Unlock()
+
 	n.synonyms = config.Synonyms
+
+	// Sort keys by descending length for greedy longest-match replacement,
+	// and alphabetically for deterministic tie-breaking.
+	keys := make([]string, 0, len(config.Synonyms))
+	for k := range config.Synonyms {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if len(keys[i]) != len(keys[j]) {
+			return len(keys[i]) > len(keys[j])
+		}
+		return keys[i] < keys[j]
+	})
+
+	n.rules = make([]synonymRule, 0, len(keys))
+	for _, k := range keys {
+		v := config.Synonyms[k]
+		// Match whole words/phrases using word boundaries \b
+		pattern := `\b` + regexp.QuoteMeta(k) + `\b`
+		re, err := regexp.Compile(pattern)
+		if err == nil {
+			n.rules = append(n.rules, synonymRule{key: k, val: v, re: re})
+		}
+	}
+
 	return nil
 }
 
@@ -101,20 +139,11 @@ func expandContractions(s string) string {
 }
 
 func (n *Normalizer) applySynonyms(s string) string {
-	// Note: We apply synonyms to the whole string or parts of it.
-	// Since order matters (per plan), and we shouldn't sort words, 
-	// we iterate through the synonym map.
-	// The plan says: "Replacements are applied left-to-right (order matters for overlaps)."
-	// This usually implies a sorted list of keys or taking synonyms as they appear in the file.
-	// Since Go maps are unordered, this implementation might need a slice if order is critical.
-	// For now, we'll do simple replacement.
-	
-	// Better approach for "order matters": users usually mean long matches first.
-	// But our synonyms.yaml is just a map.
-	for k, v := range n.synonyms {
-		// Use word boundaries if possible, but simple replace for now 
-		// as punctuation is already gone.
-		s = strings.ReplaceAll(s, k, v)
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+
+	for _, rule := range n.rules {
+		s = rule.re.ReplaceAllString(s, rule.val)
 	}
 	return s
 }

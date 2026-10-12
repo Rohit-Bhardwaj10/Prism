@@ -17,7 +17,7 @@ services:
   # ── 1. Prism Proxy ───────────────────────────────────
   cache-proxy:
     build:
-      context: .
+      context: .  
       dockerfile: Dockerfile
     container_name: prism-proxy
     ports:
@@ -27,7 +27,13 @@ services:
       # ── Infra (auto-wired to other containers) ───────────────
       REDIS_URL:      "redis:6379"
       POSTGRES_URL:   "postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable"
+      BACKEND_URL:    "http://mock-backend:8081"
       OLLAMA_URL:     "${OLLAMA_URL:-http://ollama:11434}"
+      # ── Embeddings (Ollama local / OpenAI-compatible) ────────
+      EMBEDDING_PROVIDER: "${EMBEDDING_PROVIDER:-ollama}"
+      EMBEDDING_MODEL:    "${EMBEDDING_MODEL:-nomic-embed-text}"
+      OPENAI_API_KEY:     "${OPENAI_API_KEY}"
+      OPENAI_BASE_URL:    "${OPENAI_BASE_URL:-https://api-inference.huggingface.co/v1}"
       # ── Security ─────────────────────────────────────────────
       JWT_SECRET:     "${JWT_SECRET}"
       # ── Cache tuning ─────────────────────────────────────────
@@ -45,8 +51,6 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      ollama:
-        condition: service_started
     restart: unless-stopped
     networks:
       - cache-net
@@ -167,6 +171,20 @@ services:
       - ./configs/grafana/provisioning:/etc/grafana/provisioning:ro
     depends_on:
       - prometheus
+    restart: unless-stopped
+    networks:
+      - cache-net
+
+  # ── 7. Mock Backend ──────────────────────────────────────────
+  mock-backend:
+    image: golang:1.23-alpine
+    container_name: prism-mock-backend
+    working_dir: /app
+    volumes:
+      - .:/app
+    command: go run ./cmd/mock-backend/main.go
+    ports:
+      - "8081:8081"
     restart: unless-stopped
     networks:
       - cache-net

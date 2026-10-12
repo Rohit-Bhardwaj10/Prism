@@ -103,29 +103,46 @@ func (h *Handler) HandleHealth(w http.ResponseWriter, r *http.Request) {
 // HandleAnalytics processes a GET /analytics/cost-savings request.
 func (h *Handler) HandleAnalytics(w http.ResponseWriter, r *http.Request) {
 	tenantID := GetTenantID(r.Context())
-	// TODO: query real per-tenant stats from Postgres using the provider/model columns.
-	// SELECT COUNT(*), SUM(prompt_tokens+completion_tokens) FROM cache_entries WHERE tenant_id=$1
-	resp := map[string]interface{}{
-		"tenant_id": tenantID,
-		"message":   "Analytics endpoint — real query coming soon. See /metrics for live Prometheus data.",
+	var stats map[string]interface{}
+	var err error
+	if h.coord != nil {
+		stats, err = h.coord.GetStats(r.Context(), tenantID)
+	} else {
+		stats = map[string]interface{}{"tenant_id": tenantID}
+	}
+	if err != nil {
+		http.Error(w, "Failed to retrieve analytics: "+err.Error(), http.StatusInternalServerError)
+		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(stats)
 }
 
 // HandleAdminInvalidate processes a POST /admin/invalidate request.
-// It accepts a tenant_id + normalized query and publishes an invalidation event.
+// It accepts a tenant_id + normalized query / query_hash and invalidates all cache layers.
 func (h *Handler) HandleAdminInvalidate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		TenantID        string `json:"tenant_id"`
 		NormalizedQuery string `json:"query_normalized"`
+		QueryHash       string `json:"query_hash"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid body", http.StatusBadRequest)
 		return
 	}
+	if req.TenantID == "" {
+		req.TenantID = GetTenantID(r.Context())
+	}
+
+	if h.coord != nil {
+		if err := h.coord.Invalidate(r.Context(), req.TenantID, req.QueryHash, req.NormalizedQuery); err != nil {
+			http.Error(w, "Invalidation failed: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+
 	w.WriteHeader(http.StatusAccepted)
-	fmt.Fprintf(w, "Invalidation request accepted for tenant %s", req.TenantID)
+	fmt.Fprintf(w, "Invalidation completed for tenant %s", req.TenantID)
 }
 
 // HandleAdminReload processes a POST /admin/reload-policies request.
@@ -207,9 +224,12 @@ func (h *Handler) HandleFeedback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// In Phase 5 we'll store this in Postgres for the tuner
-	log.Printf("[FEEDBACK] RequestID: %s, Correct: %v, Reason: %s\n", req.RequestID, req.Correct, req.Reason)
-	
+	tenantID := GetTenantID(r.Context())
+	if h.coord != nil {
+		_ = h.coord.RecordFeedback(r.Context(), req.RequestID, tenantID, req.Reason, req.Correct)
+	}
+	log.Printf("[FEEDBACK] TenantID: %s, RequestID: %s, Correct: %v, Reason: %s\n", tenantID, req.RequestID, req.Correct, req.Reason)
+
 	w.WriteHeader(http.StatusAccepted)
 }
 
@@ -317,17 +337,29 @@ func (h *Handler) handleOpenAICompatibleProxy(w http.ResponseWriter, r *http.Req
 		msgs = append(msgs, backendpkg.Message{Role: m.Role, Content: m.Content})
 	}
 
-	coordReq := cache.QueryRequest{
-		Provider:  provider,
-		Model:     req.Model,
-		System:    system,
-		Messages:  msgs,
-		TenantID:  tenantID,
-		RequestID: requestID,
+	var toolsStr string
+	if req.Tools != nil {
+		if tb, err := json.Marshal(req.Tools); err == nil {
+			toolsStr = string(tb)
+		}
 	}
 
-	// Normalize for L2b embedding (proxy path uses embeddableText inside CheckCache)
-	normalized := "" // no single "query" string for proxy paths
+	coordReq := cache.QueryRequest{
+		Provider:    provider,
+		Model:       req.Model,
+		System:      system,
+		Messages:    msgs,
+		TenantID:    tenantID,
+		RequestID:   requestID,
+		Temperature: req.Temperature,
+		TopP:        req.TopP,
+		MaxTokens:   req.MaxTokens,
+		Tools:       toolsStr,
+	}
+
+	// Normalize for L2b embedding & temporal check using the last user prompt
+	lastUser := lastUserMessage(msgs)
+	normalized := h.coord.Normalize(lastUser)
 	cacheKey := cache.ComputeCacheKeyExported(coordReq, normalized)
 	domain := h.coord.ClassifyDomain(normalized)
 
@@ -346,15 +378,25 @@ func (h *Handler) handleOpenAICompatibleProxy(w http.ResponseWriter, r *http.Req
 		model = req.Model
 		usage = hit.Usage
 	} else {
-		// Cache miss — call upstream
+		// Cache miss — record metrics and call upstream
+		if m := h.coord.Metrics(); m != nil {
+			m.CacheMisses.WithLabelValues(tenantID).Inc()
+			m.BackendCalls.WithLabelValues(domain, tenantID).Inc()
+			m.BackendCostTotal.Add(cache.CostBackendPerRequest)
+		}
 		proxyReq := &backendpkg.ProxyRequest{
-			Provider:  provider,
-			Model:     req.Model,
-			System:    system,
-			Messages:  msgs,
-			TenantID:  tenantID,
-			RequestID: requestID,
-			APIKey:    apiKey,
+			Provider:    provider,
+			Model:       req.Model,
+			System:      system,
+			Messages:    msgs,
+			TenantID:    tenantID,
+			RequestID:   requestID,
+			APIKey:      apiKey,
+			Temperature: req.Temperature,
+			TopP:        req.TopP,
+			MaxTokens:   req.MaxTokens,
+			Tools:       req.Tools,
+			ToolChoice:  req.ToolChoice,
 		}
 		proxyResp, err := h.coord.CallOpenAICompatible(r.Context(), proxyReq)
 		if err != nil {
@@ -386,6 +428,69 @@ func (h *Handler) handleOpenAICompatibleProxy(w http.ResponseWriter, r *http.Req
 			emb, _ = h.coord.EmbedText(r.Context(), embText)
 		}
 		go h.coord.PersistAsync(context.Background(), tenantID, normalized, cacheKey, domain, entry, emb)
+	}
+
+	// Handle streaming mode (OpenAI SSE protocol)
+	if req.Stream {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		w.Header().Set("X-Cache", hit.Source)
+		if hit.Hit {
+			w.Header().Set("X-Cache-Hit", "true")
+		}
+
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
+			return
+		}
+
+		chunkID := "chatcmpl-" + requestID
+		words := strings.Split(content, " ")
+		for i, word := range words {
+			token := word
+			if i < len(words)-1 {
+				token += " "
+			}
+			chunk := map[string]interface{}{
+				"id":      chunkID,
+				"object":  "chat.completion.chunk",
+				"created": time.Now().Unix(),
+				"model":   model,
+				"choices": []map[string]interface{}{
+					{
+						"index": 0,
+						"delta": map[string]string{
+							"content": token,
+						},
+						"finish_reason": nil,
+					},
+				},
+			}
+			data, _ := json.Marshal(chunk)
+			fmt.Fprintf(w, "data: %s\n\n", string(data))
+			flusher.Flush()
+		}
+
+		finalChunk := map[string]interface{}{
+			"id":      chunkID,
+			"object":  "chat.completion.chunk",
+			"created": time.Now().Unix(),
+			"model":   model,
+			"choices": []map[string]interface{}{
+				{
+					"index":         0,
+					"delta":         map[string]string{},
+					"finish_reason": "stop",
+				},
+			},
+		}
+		data, _ := json.Marshal(finalChunk)
+		fmt.Fprintf(w, "data: %s\n\n", string(data))
+		fmt.Fprintf(w, "data: [DONE]\n\n")
+		flusher.Flush()
+		return
 	}
 
 	// Build OpenAI-compatible response
@@ -456,16 +561,28 @@ func (h *Handler) HandleProxyAnthropic(w http.ResponseWriter, r *http.Request) {
 		msgs = append(msgs, backendpkg.Message{Role: m.Role, Content: m.Content})
 	}
 
-	coordReq := cache.QueryRequest{
-		Provider:  "anthropic",
-		Model:     req.Model,
-		System:    req.System,
-		Messages:  msgs,
-		TenantID:  tenantID,
-		RequestID: requestID,
+	var toolsStr string
+	if req.Tools != nil {
+		if tb, err := json.Marshal(req.Tools); err == nil {
+			toolsStr = string(tb)
+		}
 	}
 
-	normalized := ""
+	coordReq := cache.QueryRequest{
+		Provider:    "anthropic",
+		Model:       req.Model,
+		System:      req.System,
+		Messages:    msgs,
+		TenantID:    tenantID,
+		RequestID:   requestID,
+		Temperature: req.Temperature,
+		TopP:        req.TopP,
+		MaxTokens:   req.MaxTokens,
+		Tools:       toolsStr,
+	}
+
+	lastUser := lastUserMessage(msgs)
+	normalized := h.coord.Normalize(lastUser)
 	cacheKey := cache.ComputeCacheKeyExported(coordReq, normalized)
 	domain := h.coord.ClassifyDomain(normalized)
 
@@ -483,14 +600,24 @@ func (h *Handler) HandleProxyAnthropic(w http.ResponseWriter, r *http.Request) {
 		model = req.Model
 		usage = hit.Usage
 	} else {
+		// Cache miss — record metrics and call upstream
+		if m := h.coord.Metrics(); m != nil {
+			m.CacheMisses.WithLabelValues(tenantID).Inc()
+			m.BackendCalls.WithLabelValues(domain, tenantID).Inc()
+			m.BackendCostTotal.Add(cache.CostBackendPerRequest)
+		}
 		proxyReq := &backendpkg.ProxyRequest{
-			Provider:  "anthropic",
-			Model:     req.Model,
-			System:    req.System,
-			Messages:  msgs,
-			TenantID:  tenantID,
-			RequestID: requestID,
-			APIKey:    apiKey,
+			Provider:    "anthropic",
+			Model:       req.Model,
+			System:      req.System,
+			Messages:    msgs,
+			TenantID:    tenantID,
+			RequestID:   requestID,
+			APIKey:      apiKey,
+			Temperature: req.Temperature,
+			TopP:        req.TopP,
+			MaxTokens:   req.MaxTokens,
+			Tools:       req.Tools,
 		}
 		proxyResp, err := h.coord.CallAnthropic(r.Context(), proxyReq)
 		if err != nil {
@@ -521,6 +648,80 @@ func (h *Handler) HandleProxyAnthropic(w http.ResponseWriter, r *http.Request) {
 			emb, _ = h.coord.EmbedText(r.Context(), embText)
 		}
 		go h.coord.PersistAsync(context.Background(), tenantID, normalized, cacheKey, domain, entry, emb)
+	}
+
+	// Handle streaming mode (Anthropic SSE protocol)
+	if req.Stream {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		w.Header().Set("X-Cache", hit.Source)
+		if hit.Hit {
+			w.Header().Set("X-Cache-Hit", "true")
+		}
+
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
+			return
+		}
+
+		msgID := "msg-cache-" + requestID
+		startEvt := map[string]interface{}{
+			"type": "message_start",
+			"message": map[string]interface{}{
+				"id":      msgID,
+				"type":    "message",
+				"role":    "assistant",
+				"model":   model,
+				"content": []interface{}{},
+				"usage":   map[string]int{"input_tokens": usage.PromptTokens, "output_tokens": 0},
+			},
+		}
+		b, _ := json.Marshal(startEvt)
+		fmt.Fprintf(w, "event: message_start\ndata: %s\n\n", string(b))
+
+		blockStart := map[string]interface{}{
+			"type":          "content_block_start",
+			"index":         0,
+			"content_block": map[string]string{"type": "text", "text": ""},
+		}
+		b, _ = json.Marshal(blockStart)
+		fmt.Fprintf(w, "event: content_block_start\ndata: %s\n\n", string(b))
+
+		words := strings.Split(content, " ")
+		for i, word := range words {
+			token := word
+			if i < len(words)-1 {
+				token += " "
+			}
+			deltaEvt := map[string]interface{}{
+				"type":  "content_block_delta",
+				"index": 0,
+				"delta": map[string]string{"type": "text_delta", "text": token},
+			}
+			b, _ = json.Marshal(deltaEvt)
+			fmt.Fprintf(w, "event: content_block_delta\ndata: %s\n\n", string(b))
+			flusher.Flush()
+		}
+
+		blockStop := map[string]interface{}{"type": "content_block_stop", "index": 0}
+		b, _ = json.Marshal(blockStop)
+		fmt.Fprintf(w, "event: content_block_stop\ndata: %s\n\n", string(b))
+
+		msgDelta := map[string]interface{}{
+			"type":  "message_delta",
+			"delta": map[string]string{"stop_reason": "end_turn"},
+			"usage": map[string]int{"output_tokens": usage.CompletionTokens},
+		}
+		b, _ = json.Marshal(msgDelta)
+		fmt.Fprintf(w, "event: message_delta\ndata: %s\n\n", string(b))
+
+		msgStop := map[string]interface{}{"type": "message_stop"}
+		b, _ = json.Marshal(msgStop)
+		fmt.Fprintf(w, "event: message_stop\ndata: %s\n\n", string(b))
+		flusher.Flush()
+		return
 	}
 
 	// Build Anthropic-compatible response

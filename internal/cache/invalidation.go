@@ -39,11 +39,13 @@ func (c *Coordinator) StartInvalidationListener(ctx context.Context) {
 			}
 
 			// Invalidate L1
-			// Currently L1 is an LRU, we can just delete by key if it's an exact match.
 			if inv.NormalizedQuery != "" {
 				c.l1.Remove(inv.TenantID, inv.NormalizedQuery)
-				log.Printf("Invalidation: removed %s:%s from L1.", inv.TenantID, inv.NormalizedQuery)
 			}
+			if inv.Pattern != "" {
+				c.l1.Remove(inv.TenantID, inv.Pattern)
+			}
+			log.Printf("Invalidation: removed entry for tenant %s from L1.", inv.TenantID)
 		}
 	}
 }

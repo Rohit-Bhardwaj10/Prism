@@ -14,25 +14,28 @@ func BenchmarkCoordinator_L1_Hit(b *testing.B) {
 	ctx := context.Background()
 	normalizer := NewNormalizer()
 	l1 := NewL1Cache(1024 * 1024)
+	classifier := policy.NewDomainClassifier()
+	policyEngine, _ := policy.NewEngine("../../configs/policies.yaml")
 
 	coord := NewCoordinator(Config{
 		Normalizer: normalizer,
 		L1:         l1,
-		Policy:     policy.NewDomainClassifier().engine(), // basic engine
+		Classifier: classifier,
+		Policy:     policyEngine,
 	})
 
 	tenant := "bench_tenant"
 	query := "What is the capital of France?"
 	ans := "Paris"
 
-	// Pre-populate
-	coord.l1.Set(tenant, coord.normalizer.Normalize(query), ans, 1*time.Hour)
-
 	req := QueryRequest{
 		Query:    query,
 		TenantID: tenant,
 	}
 
+	// Pre-populate using the same cacheKey computeCacheKey generates
+	cacheKey := computeCacheKey(req, normalizer.Normalize(query))
+	coord.l1.Set(tenant, cacheKey, ans, 1*time.Hour)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_, _ = coord.Query(ctx, req)

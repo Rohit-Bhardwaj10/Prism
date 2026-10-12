@@ -3,6 +3,7 @@ package embeddings
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,7 +24,7 @@ type Breaker interface {
 	Execute(func() error) error
 }
 
-type Client struct {
+type OllamaClient struct {
 	BaseURL    string
 	Model      string
 	HTTPClient *http.Client
@@ -40,8 +41,8 @@ type EmbeddingResponse struct {
 	Embedding []float32 `json:"embedding"`
 }
 
-func NewOllamaClient(baseURL, model string, rdb *redis.Client, breaker Breaker) *Client {
-	return &Client{
+func NewOllamaClient(baseURL, model string, rdb *redis.Client, breaker Breaker) *OllamaClient {
+	return &OllamaClient{
 		BaseURL: baseURL,
 		Model:   model,
 		Redis:   rdb,
@@ -55,9 +56,10 @@ func NewOllamaClient(baseURL, model string, rdb *redis.Client, breaker Breaker) 
 // Embed generates a vector embedding for the given text.
 // It first checks Redis for a cached result. If not found, it calls Ollama
 // within a circuit breaker and caches the result on success.
-func (c *Client) Embed(ctx context.Context, text string) ([]float32, error) {
+func (c *OllamaClient) Embed(ctx context.Context, text string) ([]float32, error) {
 	// 1. Check Redis cache first if available
-	cacheKey := fmt.Sprintf("emb:%s:%s", c.Model, text)
+	h := sha256.Sum256([]byte(text))
+	cacheKey := fmt.Sprintf("emb:%s:%x", c.Model, h)
 	if c.Redis != nil {
 		val, err := c.Redis.Get(ctx, cacheKey).Bytes()
 		if err == nil {
@@ -123,7 +125,7 @@ func (c *Client) Embed(ctx context.Context, text string) ([]float32, error) {
 }
 
 // IsHealthy checks if the Ollama server is reachable.
-func (c *Client) IsHealthy(ctx context.Context) bool {
+func (c *OllamaClient) IsHealthy(ctx context.Context) bool {
 	// Simple reachability check (GET base URL)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL, nil)
 	if err != nil {

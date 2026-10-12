@@ -4,9 +4,12 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"os"
+	"strconv"
 	"time"
 
 	"github.com/Rohit-Bhardwaj10/prism/internal/cache"
+	"golang.org/x/time/rate"
 )
 
 // Server defines the HTTP server that hosts the semantic cache API.
@@ -21,8 +24,19 @@ func NewServer(addr string, coord *cache.Coordinator) *Server {
 	h := NewHandler(coord)
 	mux := http.NewServeMux()
 
-	// 10 requests per second with a burst of 20 - adjustable
-	rl := NewRateLimiter(10, 20)
+	// Rate limiting from RATE_LIMIT_RPM env var (default 1000 RPM, burst 33)
+	rpm := 1000.0
+	if rpmStr := os.Getenv("RATE_LIMIT_RPM"); rpmStr != "" {
+		if parsed, err := strconv.ParseFloat(rpmStr, 64); err == nil && parsed > 0 {
+			rpm = parsed
+		}
+	}
+	rps := rate.Limit(rpm / 60.0)
+	burst := int(rpm / 30.0)
+	if burst < 10 {
+		burst = 10
+	}
+	rl := NewRateLimiter(rps, burst)
 
 	// Register routes
 	mux.HandleFunc("/cache/query", h.HandleQuery)
@@ -35,7 +49,7 @@ func NewServer(addr string, coord *cache.Coordinator) *Server {
 	mux.HandleFunc("/metrics", h.HandleMetrics)
 
 	// Proxy routes — drop-in replacements for upstream provider endpoints.
-	// Clients set Authorization: Bearer <provider-api-key> and X-Tenant-ID: <tenant>.
+	// Clients set Authorization: Bearer <provider-api-key> and X-Tenant-ID: <tenant>. can be for any provider
 	mux.HandleFunc("/proxy/openai", h.HandleProxyOpenAI)
 	mux.HandleFunc("/proxy/groq", h.HandleProxyGroq)
 	mux.HandleFunc("/proxy/together", h.HandleProxyTogether)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -24,7 +25,7 @@ type Coordinator struct {
 	l1         *L1Cache
 	l2a        *L2aCache
 	l2b        *L2bCache
-	embeddings *embeddings.Client
+	embeddings embeddings.Client
 	policy     *policy.Engine
 	classifier *policy.DomainClassifier
 	backend    backend.Backend
@@ -42,7 +43,7 @@ type Config struct {
 	L1         *L1Cache
 	L2a        *L2aCache
 	L2b        *L2bCache
-	Embeddings *embeddings.Client
+	Embeddings embeddings.Client
 	Policy     *policy.Engine
 	Classifier *policy.DomainClassifier
 	Backend    backend.Backend
@@ -77,14 +78,18 @@ type QueryRequest struct {
 	RequestID string
 
 	// Proxy-mode fields — populated by proxy handlers only.
-	Provider string           // "openai" | "anthropic" | "groq" | "together"
-	Model    string           // exact model identifier
-	System   string           // system prompt
-	Messages []backend.Message // ordered conversation turns
+	Provider    string            // "openai" | "anthropic" | "groq" | "together"
+	Model       string            // exact model identifier
+	System      string            // system prompt
+	Messages    []backend.Message // ordered conversation turns
+	Temperature *float64
+	TopP        *float64
+	MaxTokens   int
+	Tools       string // canonical JSON string representation of tools
 }
 
 // computeCacheKey returns a stable sha256-based key over all request dimensions that affect
-// uniqueness: provider, model, system prompt, and the full message array.
+// uniqueness: provider, model, system prompt, sampling hyperparameters, tools, and the full message array.
 // For legacy /cache/query requests (no messages), it hashes the normalized query string instead.
 // The result is used as the `query` argument to L1/L2a (both treat it as an opaque key)
 // and as CacheEntry.QueryHash for the Postgres UNIQUE(tenant_id, query_hash) constraint.
@@ -98,6 +103,17 @@ func computeCacheKey(req QueryRequest, normalized string) string {
 	sb.WriteByte('|')
 	sb.WriteString(req.System)
 	sb.WriteByte('|')
+	if req.Temperature != nil {
+		sb.WriteString(fmt.Sprintf("temp:%.2f|", *req.Temperature))
+	}
+	if req.TopP != nil {
+		sb.WriteString(fmt.Sprintf("top_p:%.2f|", *req.TopP))
+	}
+	if req.Tools != "" {
+		sb.WriteString("tools:")
+		sb.WriteString(req.Tools)
+		sb.WriteByte('|')
+	}
 	for _, m := range req.Messages {
 		sb.WriteString(m.Role)
 		sb.WriteByte(':')
@@ -277,11 +293,16 @@ func (c *Coordinator) CheckCache(
 		textToEmbed := embeddableText(req, normalized)
 		emb, err := c.embeddings.Embed(ctx, textToEmbed)
 		if err == nil {
-			candidates, err := c.l2b.Search(ctx, req.TenantID, emb, 5)
+			candidates, err := c.l2b.Search(ctx, req.TenantID, req.Provider, req.Model, emb, 5)
 			if err == nil && len(candidates) > 0 {
 				p := c.policy.GetPolicy(domain)
 
 				for _, candle := range candidates {
+					// Check TTL expiration
+					if candle.IsExpired() {
+						continue
+					}
+
 					// Temporal check
 					if policy.TemporalClass(normalized) != policy.TemporalClass(candle.QueryNormalized) {
 						continue
@@ -549,4 +570,98 @@ func (c *Coordinator) CallAnthropic(ctx context.Context, req *backend.ProxyReque
 		resp, err = b.ProxyCall(ctx, req)
 	}
 	return resp, err
+}
+
+// Normalize applies L0 normalization to text.
+func (c *Coordinator) Normalize(text string) string {
+	if c.normalizer == nil {
+		return text
+	}
+	return c.normalizer.Normalize(text)
+}
+
+// Invalidate removes entries from all configured cache layers (L1, L2a, L2b) and broadcasts invalidation.
+func (c *Coordinator) Invalidate(ctx context.Context, tenantID, queryHash, queryNormalized string) error {
+	if tenantID == "" {
+		tenantID = "default"
+	}
+	if c.l1 != nil {
+		if queryHash != "" {
+			c.l1.Remove(tenantID, queryHash)
+		}
+		if queryNormalized != "" {
+			c.l1.Remove(tenantID, queryNormalized)
+		}
+	}
+	if c.l2a != nil && c.l2a.Client != nil {
+		if queryHash != "" {
+			_ = c.l2a.Client.Del(ctx, fmt.Sprintf("norm:%s:%s", tenantID, queryHash)).Err()
+		}
+		if queryNormalized != "" {
+			_ = c.l2a.Client.Del(ctx, fmt.Sprintf("norm:%s:%s", tenantID, queryNormalized)).Err()
+		}
+		msg := InvalidationMessage{
+			TenantID:        tenantID,
+			NormalizedQuery: queryNormalized,
+			Pattern:         queryHash,
+		}
+		if payload, err := json.Marshal(msg); err == nil {
+			_ = c.l2a.Client.Publish(ctx, InvalidationChannel, string(payload)).Err()
+		}
+	}
+	if c.l2b != nil && c.l2b.pool != nil {
+		if queryHash != "" {
+			_, _ = c.l2b.pool.Exec(ctx, `DELETE FROM cache_entries WHERE tenant_id = $1 AND query_hash = $2`, tenantID, queryHash)
+		} else if queryNormalized != "" {
+			_, _ = c.l2b.pool.Exec(ctx, `DELETE FROM cache_entries WHERE tenant_id = $1 AND query_normalized = $2`, tenantID, queryNormalized)
+		}
+	}
+	return nil
+}
+
+// GetStats returns usage and cost savings analytics for a tenant.
+func (c *Coordinator) GetStats(ctx context.Context, tenantID string) (map[string]interface{}, error) {
+	if tenantID == "" {
+		tenantID = "default"
+	}
+	stats := map[string]interface{}{
+		"tenant_id": tenantID,
+	}
+	if c.l2b != nil && c.l2b.pool != nil {
+		row := c.l2b.pool.QueryRow(ctx, `
+			SELECT COUNT(*),
+			       COALESCE(SUM(access_count), 0),
+			       COALESCE(SUM(prompt_tokens + completion_tokens), 0)
+			FROM cache_entries
+			WHERE tenant_id = $1
+		`, tenantID)
+		var entryCount, accessCount, tokenSum int64
+		if err := row.Scan(&entryCount, &accessCount, &tokenSum); err == nil {
+			stats["cached_entries"] = entryCount
+			stats["total_access_count"] = accessCount
+			stats["total_tokens_cached"] = tokenSum
+			stats["estimated_savings_usd"] = float64(accessCount) * CostBackendPerRequest
+		}
+	}
+	return stats, nil
+}
+
+// RecordFeedback stores quality feedback from clients in Postgres.
+func (c *Coordinator) RecordFeedback(ctx context.Context, requestID, tenantID, reason string, correct bool) error {
+	if tenantID == "" {
+		tenantID = "default"
+	}
+	if c.l2b != nil && c.l2b.pool != nil {
+		_, err := c.l2b.pool.Exec(ctx, `
+			INSERT INTO feedback (request_id, tenant_id, correct, reason, ts)
+			VALUES ($1, $2, $3, $4, NOW())
+		`, requestID, tenantID, correct, reason)
+		return err
+	}
+	return nil
+}
+
+// Metrics returns the Prometheus metrics collector instance.
+func (c *Coordinator) Metrics() *metrics.Metrics {
+	return c.metrics
 }

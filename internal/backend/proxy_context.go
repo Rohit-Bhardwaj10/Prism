@@ -31,15 +31,20 @@ type Usage struct {
 // Proxy handlers parse the provider-specific wire format into this struct and pass
 // it to the coordinator via CheckCache / PersistAsync.
 type ProxyRequest struct {
-	Provider  string    // "openai" | "anthropic" | "groq" | "together"
-	Model     string    // e.g. "gpt-4o", "claude-3-5-sonnet-20241022"
-	System    string    // system prompt (may be empty)
-	Messages  []Message // ordered conversation turns
-	TenantID  string    // injected by AuthMiddleware
-	RequestID string    // injected by RequestIDMiddleware
-	Domain    string    // optional hint; auto-classified if empty
-	APIKey    string    // upstream provider API key (from Authorization header)
-	BaseURL   string    // override base URL (empty = use well-known default)
+	Provider    string      // "openai" | "anthropic" | "groq" | "together"
+	Model       string      // e.g. "gpt-4o", "claude-3-5-sonnet-20241022"
+	System      string      // system prompt (may be empty)
+	Messages    []Message   // ordered conversation turns
+	TenantID    string      // injected by AuthMiddleware
+	RequestID   string      // injected by RequestIDMiddleware
+	Domain      string      // optional hint; auto-classified if empty
+	APIKey      string      // upstream provider API key (from Authorization header)
+	BaseURL     string      // override base URL (empty = use well-known default)
+	Temperature *float64    // sampling temperature
+	TopP        *float64    // nucleus sampling top_p
+	MaxTokens   int         // max completion tokens
+	Tools       interface{} // function/tool calling specifications
+	ToolChoice  interface{} // tool choice specification
 }
 
 // ProxyResponse is the canonical response returned by proxy handlers.

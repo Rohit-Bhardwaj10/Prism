@@ -20,7 +20,8 @@ import (
 func TestAPI_Query(t *testing.T) {
 	// Setup Mocks
 	l1 := cache.NewL1Cache(1024)
-	l1.Set("default", "hello", "world", 0)
+	cacheKey := cache.ComputeCacheKeyExported(cache.QueryRequest{Query: "hello", TenantID: "default"}, "hello")
+	l1.Set("default", cacheKey, "world", 0)
 
 	coord := cache.NewCoordinator(cache.Config{
 		L1:         l1,
@@ -171,7 +172,8 @@ func TestAPI_Feedback(t *testing.T) {
 
 func TestAPI_Streaming(t *testing.T) {
 	l1 := cache.NewL1Cache(1024)
-	l1.Set("default", "hello", "world is beautiful", 0)
+	cacheKey := cache.ComputeCacheKeyExported(cache.QueryRequest{Query: "hello", TenantID: "default"}, "hello")
+	l1.Set("default", cacheKey, "world is beautiful", 0)
 	
 	coord := cache.NewCoordinator(cache.Config{
 		L1:         l1,
@@ -201,3 +203,168 @@ func TestAPI_Streaming(t *testing.T) {
 		t.Errorf("SSE output missing done event: %s", got)
 	}
 }
+
+func TestAPI_ProxyOpenAI_JSONAndStream(t *testing.T) {
+	l1 := cache.NewL1Cache(1024)
+	coordReq := cache.QueryRequest{
+		Provider: "openai",
+		Model:    "gpt-4o",
+		Messages: []backend.Message{{Role: "user", Content: "What is Prism?"}},
+		TenantID: "default",
+	}
+	cacheKey := cache.ComputeCacheKeyExported(coordReq, "What is Prism?")
+	l1.Set("default", cacheKey, "Prism is an intelligent semantic cache.", 0)
+
+	coord := cache.NewCoordinator(cache.Config{
+		L1:         l1,
+		Normalizer: cache.NewNormalizer(),
+		Classifier: policy.NewDomainClassifier(),
+		Audit:      audit.NewLogger(),
+	})
+	srv := api.NewServer(":8080", coord)
+
+	// 1. Regular JSON proxy request
+	reqBody := `{"model":"gpt-4o","messages":[{"role":"user","content":"What is Prism?"}]}`
+	r := httptest.NewRequest("POST", "/proxy/openai", bytes.NewBufferString(reqBody))
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("Expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if w.Header().Get("X-Cache") != "L1" {
+		t.Errorf("Expected X-Cache header to be L1, got %s", w.Header().Get("X-Cache"))
+	}
+	var resp api.OpenAIProxyResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("Failed to parse OpenAI proxy response: %v", err)
+	}
+	if len(resp.Choices) == 0 || resp.Choices[0].Message.Content != "Prism is an intelligent semantic cache." {
+		t.Errorf("Unexpected choices content: %+v", resp.Choices)
+	}
+
+	// 2. Stream = true request
+	reqBodyStream := `{"model":"gpt-4o","stream":true,"messages":[{"role":"user","content":"What is Prism?"}]}`
+	r = httptest.NewRequest("POST", "/proxy/openai", bytes.NewBufferString(reqBodyStream))
+	w = httptest.NewRecorder()
+	srv.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("Expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Header().Get("Content-Type"), "text/event-stream") {
+		t.Errorf("Expected text/event-stream content type, got %s", w.Header().Get("Content-Type"))
+	}
+	streamOut := w.Body.String()
+	if !strings.Contains(streamOut, "chat.completion.chunk") {
+		t.Errorf("Expected chat.completion.chunk in stream output: %s", streamOut)
+	}
+	if !strings.Contains(streamOut, "data: [DONE]") {
+		t.Errorf("Expected [DONE] in stream output: %s", streamOut)
+	}
+}
+
+func TestAPI_ProxyAnthropic_JSONAndStream(t *testing.T) {
+	l1 := cache.NewL1Cache(1024)
+	coordReq := cache.QueryRequest{
+		Provider: "anthropic",
+		Model:    "claude-3-5-sonnet",
+		Messages: []backend.Message{{Role: "user", Content: "Explain Go channels."}},
+		TenantID: "default",
+	}
+	cacheKey := cache.ComputeCacheKeyExported(coordReq, "Explain Go channels.")
+	l1.Set("default", cacheKey, "Channels are conduits for typed communication.", 0)
+
+	coord := cache.NewCoordinator(cache.Config{
+		L1:         l1,
+		Normalizer: cache.NewNormalizer(),
+		Classifier: policy.NewDomainClassifier(),
+		Audit:      audit.NewLogger(),
+	})
+	srv := api.NewServer(":8080", coord)
+
+	// 1. Regular JSON proxy request
+	reqBody := `{"model":"claude-3-5-sonnet","messages":[{"role":"user","content":"Explain Go channels."}]}`
+	r := httptest.NewRequest("POST", "/proxy/anthropic", bytes.NewBufferString(reqBody))
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("Expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp api.AnthropicProxyResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("Failed to decode Anthropic response: %v", err)
+	}
+	if len(resp.Content) == 0 || resp.Content[0].Text != "Channels are conduits for typed communication." {
+		t.Errorf("Unexpected Anthropic content: %+v", resp.Content)
+	}
+
+	// 2. Streaming request
+	reqBodyStream := `{"model":"claude-3-5-sonnet","stream":true,"messages":[{"role":"user","content":"Explain Go channels."}]}`
+	r = httptest.NewRequest("POST", "/proxy/anthropic", bytes.NewBufferString(reqBodyStream))
+	w = httptest.NewRecorder()
+	srv.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("Expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	streamOut := w.Body.String()
+	if !strings.Contains(streamOut, "event: message_start") {
+		t.Errorf("Expected message_start event: %s", streamOut)
+	}
+	if !strings.Contains(streamOut, "event: content_block_delta") {
+		t.Errorf("Expected content_block_delta event: %s", streamOut)
+	}
+	if !strings.Contains(streamOut, "event: message_stop") {
+		t.Errorf("Expected message_stop event: %s", streamOut)
+	}
+}
+
+func TestAPI_ProxyMessage_MultimodalUnmarshal(t *testing.T) {
+	// 1. Plain string content
+	msgJSON := `{"role":"user","content":"hello world"}`
+	var msg api.ProxyMessage
+	if err := json.Unmarshal([]byte(msgJSON), &msg); err != nil {
+		t.Fatalf("Failed to unmarshal string message: %v", err)
+	}
+	if msg.Content != "hello world" {
+		t.Errorf("Expected 'hello world', got %q", msg.Content)
+	}
+
+	// 2. Structured multimodal array of content parts
+	multimodalJSON := `{"role":"user","content":[{"type":"text","text":"Analyze this code"},{"type":"image_url","image_url":{"url":"data:image/png;base64,..."}}]}`
+	var multiMsg api.ProxyMessage
+	if err := json.Unmarshal([]byte(multimodalJSON), &multiMsg); err != nil {
+		t.Fatalf("Failed to unmarshal multimodal message: %v", err)
+	}
+	if multiMsg.Content != "Analyze this code" {
+		t.Errorf("Expected 'Analyze this code', got %q", multiMsg.Content)
+	}
+}
+
+func TestCoordinator_HyperparameterCacheSeparation(t *testing.T) {
+	tempZero := 0.0
+	tempOne := 1.0
+
+	reqA := cache.QueryRequest{
+		Provider:    "openai",
+		Model:       "gpt-4o",
+		Messages:    []backend.Message{{Role: "user", Content: "code"}},
+		Temperature: &tempZero,
+	}
+	reqB := cache.QueryRequest{
+		Provider:    "openai",
+		Model:       "gpt-4o",
+		Messages:    []backend.Message{{Role: "user", Content: "code"}},
+		Temperature: &tempOne,
+	}
+
+	keyA := cache.ComputeCacheKeyExported(reqA, "code")
+	keyB := cache.ComputeCacheKeyExported(reqB, "code")
+
+	if keyA == keyB {
+		t.Errorf("Expected different cache keys for different temperatures, got identical key %s", keyA)
+	}
+}
+

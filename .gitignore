@@ -1,35 +1,90 @@
-# Binaries
-  *.exe
-  *.exe~
-  *.dll
-  *.so
-  *.dylib
+# ==========================================
+# Binaries and Compiled Outputs
+# ==========================================
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+bin/
+dist/
+build/
 
-  # Test binary
-  *.test
+# Application binaries (Linux/macOS/Windows)
+server
+demo
+loadgen
+mock-backend
 
-  # Output
-  *.out
+# ==========================================
+# Test and Profiling Artifacts
+# ==========================================
+*.test
+*.out
+*.prof
+*.pprof
+profile.pprof
+coverage.txt
+coverage.html
 
-  # Dependency directories
-  vendor/
+# ==========================================
+# Go Workspaces and Dependencies
+# ==========================================
+vendor/
+go.work
+go.work.sum
 
-  # IDE
-  .idea/
-  .vscode/
-  *.swp
-  *.swo
-  *~
+# ==========================================
+# Environment and Secret Files
+# ==========================================
+# Never commit real environment or secret files
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.cert
 
-  # OS
-  .DS_Store
+# ==========================================
+# Databases and Local Data Stores
+# ==========================================
+*.db
+*.sqlite
+*.sqlite3
+data/
+postgres-data/
+redis-data/
+ollama-data/
+volumes/
 
-  # Data
-  *.db
-  data/
+# ==========================================
+# Logs and Temporary Files
+# ==========================================
+*.log
+logs/
+tmp/
+temp/
+scratch/
 
-  # Secrets — NEVER commit your real .env file
-  # .env.example is safe to commit (it's just a template)
-  .env
-  .env.local
-  .env.production
+# ==========================================
+# Operating System Artifacts
+# ==========================================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# ==========================================
+# IDE and Editor Directories
+# ==========================================
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+*.sublime-project
+*.sublime-workspace

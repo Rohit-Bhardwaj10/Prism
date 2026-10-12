@@ -46,7 +46,7 @@ func (cb *CircuitBreaker) Execute(fn func() error) error {
 
 	if err != nil {
 		cb.failures++
-		if cb.failures >= cb.maxFailures {
+		if cb.state == StateHalfOpen || cb.failures >= cb.maxFailures {
 			cb.state = StateOpen
 			cb.lastFailure = time.Now()
 		}
@@ -60,8 +60,8 @@ func (cb *CircuitBreaker) Execute(fn func() error) error {
 }
 
 func (cb *CircuitBreaker) allowRequest() bool {
-	cb.mu.RLock()
-	defer cb.mu.RUnlock()
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
 
 	if cb.state == StateClosed {
 		return true
@@ -69,17 +69,13 @@ func (cb *CircuitBreaker) allowRequest() bool {
 
 	if cb.state == StateOpen {
 		if time.Since(cb.lastFailure) > cb.timeout {
-			// Transition to half-open to allow a probe
-			cb.mu.RUnlock()
-			cb.mu.Lock()
+			// Transition to half-open to allow a single probe
 			cb.state = StateHalfOpen
-			cb.mu.Unlock()
-			cb.mu.RLock()
 			return true
 		}
 		return false
 	}
 
-	// Half-open: already probe in progress
+	// Half-open: probe already in progress
 	return false
 }
