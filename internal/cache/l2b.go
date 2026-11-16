@@ -3,9 +3,28 @@ package cache
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// formatVector serializes a float32 slice to the pgvector string representation "[0.1,0.2,...]".
+func formatVector(vec []float32) string {
+	if len(vec) == 0 {
+		return "[]"
+	}
+	var sb strings.Builder
+	sb.WriteByte('[')
+	for i, v := range vec {
+		if i > 0 {
+			sb.WriteByte(',')
+		}
+		sb.WriteString(strconv.FormatFloat(float64(v), 'f', -1, 32))
+	}
+	sb.WriteByte(']')
+	return sb.String()
+}
 
 // L2bCache handles semantic similarity search in Postgres using pgvector.
 type L2bCache struct {
@@ -30,7 +49,7 @@ func (c *L2bCache) Search(ctx context.Context, tenantID, provider, model string,
 	// (1 - distance) = similarity.
 	query := `
 		SELECT id, tenant_id, query_raw, query_normalized, query_hash, query_domain, answer,
-		       embed_model, embed_version, ttl_seconds, (1 - (embedding <=> $1)) AS similarity,
+		       embed_model, embed_version, ttl_seconds, (1 - (embedding <=> $1::vector)) AS similarity,
 		       created_at, last_accessed_at, access_count,
 		       provider, model, prompt_tokens, completion_tokens
 		FROM cache_entries
@@ -40,11 +59,11 @@ func (c *L2bCache) Search(ctx context.Context, tenantID, provider, model string,
 		  AND (ttl_seconds = 0 OR created_at + (ttl_seconds * INTERVAL '1 second') > NOW())
 		  AND ($5 = '' OR provider = $5)
 		  AND ($6 = '' OR model = $6)
-		ORDER BY embedding <=> $1
+		ORDER BY embedding <=> $1::vector
 		LIMIT $7
 	`
 
-	rows, err := c.pool.Query(ctx, query, embedding, tenantID, c.embedModel, c.embedVersion, provider, model, limit)
+	rows, err := c.pool.Query(ctx, query, formatVector(embedding), tenantID, c.embedModel, c.embedVersion, provider, model, limit)
 	if err != nil {
 		return nil, fmt.Errorf("postgres search error: %w", err)
 	}
@@ -81,14 +100,14 @@ func (c *L2bCache) Write(ctx context.Context, e *CacheEntry, embedding []float32
 			embedding, embed_model, embed_version, ttl_seconds,
 			created_at, last_accessed_at, access_count,
 			provider, model, prompt_tokens, completion_tokens
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW(), 1, $11, $12, $13, $14)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7::vector, $8, $9, $10, NOW(), NOW(), 1, $11, $12, $13, $14)
 		ON CONFLICT (tenant_id, query_hash) DO UPDATE SET
 			last_accessed_at = NOW(),
 			access_count = cache_entries.access_count + 1
 	`
 	_, err := c.pool.Exec(ctx, query,
 		e.TenantID, e.QueryRaw, e.QueryNormalized, e.QueryHash, e.QueryDomain, e.Answer,
-		embedding, c.embedModel, c.embedVersion, e.TTLSeconds,
+		formatVector(embedding), c.embedModel, c.embedVersion, e.TTLSeconds,
 		provider, e.Model, e.PromptTokens, e.CompletionTokens,
 	)
 	if err != nil {

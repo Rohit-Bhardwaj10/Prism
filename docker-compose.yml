@@ -177,7 +177,7 @@ services:
 
   # ── 7. Mock Backend ──────────────────────────────────────────
   mock-backend:
-    image: golang:1.23-alpine
+    image: golang:1.25-alpine
     container_name: prism-mock-backend
     working_dir: /app
     volumes:

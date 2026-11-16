@@ -425,7 +425,13 @@ func (h *Handler) handleOpenAICompatibleProxy(w http.ResponseWriter, r *http.Req
 
 		var emb []float32
 		if embText := cache.EmbeddableTextExported(coordReq, normalized); embText != "" {
-			emb, _ = h.coord.EmbedText(r.Context(), embText)
+			embCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			var embErr error
+			emb, embErr = h.coord.EmbedText(embCtx, embText)
+			cancel()
+			if embErr != nil {
+				log.Printf("[EMBED ERROR] Failed to embed %q: %v", embText, embErr)
+			}
 		}
 		go h.coord.PersistAsync(context.Background(), tenantID, normalized, cacheKey, domain, entry, emb)
 	}
@@ -645,7 +651,13 @@ func (h *Handler) HandleProxyAnthropic(w http.ResponseWriter, r *http.Request) {
 
 		var emb []float32
 		if embText := cache.EmbeddableTextExported(coordReq, normalized); embText != "" {
-			emb, _ = h.coord.EmbedText(r.Context(), embText)
+			embCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			var embErr error
+			emb, embErr = h.coord.EmbedText(embCtx, embText)
+			cancel()
+			if embErr != nil {
+				log.Printf("[EMBED ERROR] Failed to embed %q: %v", embText, embErr)
+			}
 		}
 		go h.coord.PersistAsync(context.Background(), tenantID, normalized, cacheKey, domain, entry, emb)
 	}

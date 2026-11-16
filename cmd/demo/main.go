@@ -260,6 +260,182 @@ func (l *L2a) Set(key string, e entry) {
 	l.store[key] = e
 }
 
+// ── Semantic similarity simulation ──────────────────────────────────────────
+
+func computeSimilarity(q1, q2 string) float32 {
+	if q1 == q2 {
+		return 1.0
+	}
+	if len(q1) == 0 || len(q2) == 0 {
+		return 0.0
+	}
+
+	stopWords := map[string]bool{
+		"a": true, "an": true, "the": true, "is": true, "are": true, "was": true, "were": true,
+		"in": true, "on": true, "at": true, "to": true, "for": true, "of": true, "with": true,
+		"by": true, "about": true, "as": true, "into": true, "through": true, "during": true,
+		"what": true, "which": true, "who": true, "whom": true, "this": true, "that": true,
+		"these": true, "those": true, "how": true, "why": true, "where": true, "when": true,
+		"do": true, "does": true, "did": true, "can": true, "could": true, "should": true,
+		"would": true, "will": true, "i": true, "you": true, "he": true, "she": true, "it": true,
+		"we": true, "they": true, "my": true, "your": true, "his": true, "her": true, "its": true,
+		"our": true, "their": true, "tell": true, "me": true, "explain": true, "give": true,
+		"and": true, "or": true, "so": true, "from": true, "be": true, "been": true, "being": true,
+	}
+
+	extractKeywords := func(q string) []string {
+		words := strings.Fields(q)
+		var kw []string
+		for _, w := range words {
+			if !stopWords[w] && len(w) > 1 {
+				kw = append(kw, w)
+			}
+		}
+		if len(kw) == 0 {
+			return words
+		}
+		return kw
+	}
+
+	kw1 := extractKeywords(q1)
+	kw2 := extractKeywords(q2)
+	if len(kw1) == 0 || len(kw2) == 0 {
+		return 0.0
+	}
+
+	matched1 := 0.0
+	for _, w1 := range kw1 {
+		best := 0.0
+		for _, w2 := range kw2 {
+			if s := wordSimilarity(w1, w2); s > best {
+				best = s
+			}
+		}
+		matched1 += best
+	}
+
+	matched2 := 0.0
+	for _, w2 := range kw2 {
+		best := 0.0
+		for _, w1 := range kw1 {
+			if s := wordSimilarity(w1, w2); s > best {
+				best = s
+			}
+		}
+		matched2 += best
+	}
+
+	len1 := float64(len(kw1))
+	len2 := float64(len(kw2))
+	containment := math.Max(matched1/len1, matched2/len2)
+	dice := (matched1 + matched2) / (len1 + len2)
+	kwScore := 0.6*containment + 0.4*dice
+
+	trigramScore := trigramSimilarity(q1, q2)
+	combined := 0.75*kwScore + 0.25*trigramScore
+
+	if combined < 0.35 {
+		return float32(combined * 0.8)
+	}
+
+	sim := float32(0.65 + (combined-0.35)*(0.33/0.65))
+	if sim > 0.99 {
+		sim = 0.99
+	}
+	return sim
+}
+
+func wordSimilarity(w1, w2 string) float64 {
+	if w1 == w2 {
+		return 1.0
+	}
+	// Prefix / suffix / stem match (e.g. "reverse" vs "reversing", "invented" vs "inventor")
+	prefixLen := 0
+	for i := 0; i < min(len(w1), len(w2)); i++ {
+		if w1[i] == w2[i] {
+			prefixLen++
+		} else {
+			break
+		}
+	}
+	if prefixLen >= 5 || (prefixLen >= 4 && min(len(w1), len(w2)) <= 6) {
+		return 0.92
+	}
+
+	// Levenshtein edit distance for typos (e.g. "python" vs "pyhton")
+	dist := levenshtein(w1, w2)
+	if dist == 1 && min(len(w1), len(w2)) >= 4 {
+		return 0.88
+	}
+	return 0.0
+}
+
+func trigramSimilarity(s1, s2 string) float64 {
+	tri1 := getTrigrams(s1)
+	tri2 := getTrigrams(s2)
+	if len(tri1) == 0 || len(tri2) == 0 {
+		return 0.0
+	}
+	shared := 0
+	counts := make(map[string]int)
+	for _, t := range tri1 {
+		counts[t]++
+	}
+	for _, t := range tri2 {
+		if counts[t] > 0 {
+			shared++
+			counts[t]--
+		}
+	}
+	return float64(2*shared) / float64(len(tri1)+len(tri2))
+}
+
+func getTrigrams(s string) []string {
+	if len(s) < 3 {
+		return []string{s}
+	}
+	var res []string
+	for i := 0; i <= len(s)-3; i++ {
+		res = append(res, s[i:i+3])
+	}
+	return res
+}
+
+func levenshtein(a, b string) int {
+	la, lb := len(a), len(b)
+	if la == 0 {
+		return lb
+	}
+	if lb == 0 {
+		return la
+	}
+	dp := make([]int, lb+1)
+	for j := 0; j <= lb; j++ {
+		dp[j] = j
+	}
+	for i := 1; i <= la; i++ {
+		prev := dp[0]
+		dp[0] = i
+		for j := 1; j <= lb; j++ {
+			tmp := dp[j]
+			cost := 0
+			if a[i-1] != b[j-1] {
+				cost = 1
+			}
+			dp[j] = min(min(dp[j]+1, dp[j-1]+1), prev+cost)
+			prev = tmp
+		}
+	}
+	return dp[lb]
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
 type L2b struct {
 	mu      sync.RWMutex
 	entries []entry
@@ -276,15 +452,24 @@ func (l *L2b) Search(tenantID, norm, domain string) (entry, float32, bool) {
 		pol = domainPolicies["general"]
 	}
 
+	var bestEntry entry
+	var bestConf float32
+
 	for _, e := range l.entries {
 		if e.domain != domain {
 			continue
 		}
+		sim := computeSimilarity(norm, e.norm)
 		age := int(time.Since(e.createdAt).Seconds())
-		conf := confidence(e.sim, age, pol)
-		if conf >= pol.ConfidenceThreshold {
-			return e, conf, true
+		conf := confidence(sim, age, pol)
+		if conf >= pol.ConfidenceThreshold && conf > bestConf {
+			bestConf = conf
+			bestEntry = e
 		}
+	}
+
+	if bestConf > 0 {
+		return bestEntry, bestConf, true
 	}
 	return entry{}, 0, false
 }

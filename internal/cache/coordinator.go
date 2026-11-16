@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -366,7 +367,13 @@ func (c *Coordinator) PersistAsync(ctx context.Context, tenantID, normalized, ca
 
 	// 3. L2b
 	if c.l2b != nil && len(embedding) > 0 {
-		_ = c.l2b.Write(ctx, entry, embedding)
+		if err := c.l2b.Write(ctx, entry, embedding); err != nil {
+			fmt.Printf("[L2b ERROR] Write failed: %v\n", err)
+		} else {
+			fmt.Printf("[L2b SUCCESS] Written entry for tenant %s, query: %s\n", tenantID, normalized)
+		}
+	} else if len(embedding) == 0 {
+		fmt.Printf("[L2b WARN] No embedding provided for query: %s, skipping L2b\n", normalized)
 	}
 }
 
@@ -386,6 +393,9 @@ func (c *Coordinator) logDecision(req QueryRequest, domain, normalized, decision
 }
 
 func (c *Coordinator) fetchFromBackend(ctx context.Context, tenantID, normalized, domain, original string, embedding []float32) (*backend.Response, error) {
+	if c.backend == nil {
+		return nil, errors.New("backend service unavailable: no backend configured")
+	}
 	// Deduplicate concurrent requests for the same exact normalized query
 	key := fmt.Sprintf("%s:%s", tenantID, normalized)
 
